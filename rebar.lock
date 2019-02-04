@@ -1,4 +1,8 @@
 [{<<"pvc_proto">>,
   {git,"https://github.com/ergl/pvc_proto.git",
        {ref,"a7d9f72c0674751717c0643e66c278b78d16e79a"}},
+  0},
+ {<<"pvc_vclock">>,
+  {git,"https://github.com/ergl/pvc_vclock.git",
+       {ref,"0b783037a6b70219b0f5ced72bf510b11f6bf5ff"}},
   0}].
