@@ -106,8 +106,10 @@ commit(_Conn, _Tx) ->
     ?missing.
 
 -spec close(connection()) -> ok.
-close(_Conn) ->
-    ?missing.
+close(#conn{sockets=Sockets}) ->
+    orddict:fold(fun(_Node, Socket, ok) ->
+        gen_tcp:close(Socket)
+    end, ok, Sockets).
 
 %%====================================================================
 %% Internal functions
