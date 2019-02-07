@@ -129,8 +129,24 @@ erlang_node_to_ip(Node) ->
 %% @doc Convert a raw riak ring into a fixed tuple structure
 -spec make_fixed_ring(non_neg_integer(), raw_ring()) -> fixed_ring().
 make_fixed_ring(Size, RawRing) ->
-    IndexedRing = lists:zip(lists:seq(1, Size), RawRing),
-    erlang:make_tuple(Size, ignore, IndexedRing).
+    erlang:make_tuple(Size, ignore, index_ring(RawRing)).
+
+%% @doc Converts a raw Antidote ring into an indexed structure
+%%
+%%      Adds a 1-based index to each entry, plus converts Erlang
+%%      nodes to an IP address, for easier matching with connection
+%%      sockets
+%%
+-spec index_ring(raw_ring()) -> [{non_neg_integer(), {partition_id(), node_ip()}}].
+index_ring(RawRing) ->
+    index_ring(RawRing, 1, []).
+
+index_ring([], _, Acc) ->
+    lists:reverse(Acc);
+
+index_ring([{Partition, ErlangNode} | Rest], N, Acc) ->
+    Converted = {N, {Partition, erlang_node_to_ip(ErlangNode)}},
+    index_ring(Rest, N + 1, [Converted | Acc]).
 
 %% @doc Given a list of nodes, open sockets to all except to the one given
 -spec open_remote_sockets(
