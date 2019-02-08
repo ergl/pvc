@@ -33,6 +33,9 @@
 -type cluster_sockets() :: orddict:orddict(node_ip(), inet:socket()).
 
 -record(conn, {
+    %% The IP we're using to talk to the server
+    %% Used to create a transaction id
+    self_ip :: string(),
     %% Ring implemented as tuples for contant access
     ring :: {non_neg_integer(), fixed_ring()},
 
@@ -78,7 +81,7 @@ connect_1(ConnectedTo, Port, Socket) ->
             UniqueNodes = unique_ring_nodes(RawRing),
             FixedRing = make_fixed_ring(RingSize, RawRing),
             AllSockets = open_remote_sockets(Socket, UniqueNodes, ConnectedTo, Port),
-            {ok, #conn{ring=FixedRing, sockets=AllSockets}}
+            {ok, #conn{self_ip=get_own_ip(Socket), ring={RingSize, FixedRing}, sockets=AllSockets}}
     end.
 
 -spec start_transaction(term()) -> {ok, transaction()}.
@@ -114,6 +117,12 @@ close(#conn{sockets=Sockets}) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
+
+%% @doc Get our own IP from a given socket
+-spec get_own_ip(inet:socket()) -> binary().
+get_own_ip(Socket) ->
+    {ok, {SelfIP, _}} = inet:sockname(Socket),
+    list_to_binary(inet:ntoa(SelfIP)).
 
 %% @doc Get an unique list of the ring owning IP addresses
 -spec unique_ring_nodes(raw_ring()) -> ordsets:ordset(node_ip()).
