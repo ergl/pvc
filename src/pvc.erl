@@ -2,10 +2,10 @@
 
 %% API exports
 -export([connect/2,
-         start_transaction/1,
+         start_transaction/2,
          read/3,
-         update/2,
          update/3,
+         update/4,
          commit/2,
          close/1]).
 
@@ -43,7 +43,22 @@
     sockets :: cluster_sockets()
 }).
 
--record(tx_state, {}).
+-type transaction_id() :: tuple().
+-type partition_ws() :: orddict:orddict(term(), term()).
+-type ws() :: orddict:orddict(index_node(), partition_ws()).
+
+-record(tx_state, {
+    %% Identifier of the current transaction
+    %% Must be unique among all other active transactions
+    id :: transaction_id(),
+    %% Marks if this transaction has been read-only so fat
+    %% Read only transactions won't go through 2pc
+    read_only = true :: boolean(),
+    %% Write set of the current transaction, partitioned
+    %% by partition. This way, we can send to partitions
+    %% only the subset they need to verify
+    writeset = [] :: ws()
+}).
 
 -opaque connection() :: #conn{}.
 -opaque transaction() :: #tx_state{}.
@@ -84,27 +99,37 @@ connect_1(ConnectedTo, Port, Socket) ->
             {ok, #conn{self_ip=get_own_ip(Socket), ring={RingSize, FixedRing}, sockets=AllSockets}}
     end.
 
--spec start_transaction(term()) -> {ok, transaction()}.
-start_transaction(_Id) ->
-    ?missing.
+%% @doc Start a new Transaction. Id should be unique for this node.
+-spec start_transaction(connection(), term()) -> {ok, transaction()}.
+start_transaction(#conn{self_ip=IP}, Id) ->
+    {ok, #tx_state{id={IP, Id}}}.
 
 -spec read(connection(), transaction(), any()) -> {ok, any(), transaction()}
                                                 | {error, abort_reason()}.
 read(_Conn, _Tx, Keys) when is_list(Keys) ->
-    erlang:error(not_implemented);
+    ?missing;
 
 read(_Conn, _Tx, _Key) ->
     ?missing.
 
--spec update(transaction(), any(), any()) -> {ok, transaction()}.
-update(_Tx, _Key, _Value) ->
-    ?missing.
+%% @doc Update the given Key. Old value is replaced with new one
+-spec update(connection(), transaction(), any(), any()) -> {ok, transaction()}.
+update(Conn, Tx = #tx_state{writeset=WS}, Key, Value) ->
+    NewWS = update_internal(Conn, Key, Value, WS),
+    {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
 
--spec update(transaction(), [{term(), term()}]) -> {ok, transaction()}.
-update(_Tx, _Updates) ->
-    ?missing.
+%% @doc Update a batch of keys. Old values are replaced with the new ones.
+-spec update(connection(), transaction(), [{term(), term()}]) -> {ok, transaction()}.
+update(Conn, Tx = #tx_state{writeset=WS}, Updates) when is_list(Updates) ->
+    NewWS = lists:foldl(fun({Key, Value}, AccWS) ->
+        update_internal(Conn, Key, Value, AccWS)
+    end, WS, Updates),
+    {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
 
 -spec commit(connection(), transaction()) -> ok | {error, abort_reason()}.
+commit(_Conn, #tx_state{read_only=true}) ->
+    ok;
+
 commit(_Conn, _Tx) ->
     ?missing.
 
@@ -181,3 +206,40 @@ open_remote_sockets_1(Nodes, SelfNode, Port, Sockets) ->
                 orddict:store(OtherNode, Sock, Acc)
         end
     end, Sockets, Nodes).
+
+-spec get_key_indexnode(connection(), term()) -> index_node().
+get_key_indexnode(#conn{ring = {Size, Layout}}, Key) ->
+    Pos = convert_key(Key) rem Size + 1,
+    erlang:element(Pos, Layout).
+
+-spec convert_key(term()) -> non_neg_integer().
+convert_key(Key) when is_binary(Key) ->
+    try
+        abs(binary_to_integer(Key))
+    catch _:_ ->
+        %% Looked into the internals of riak_core for this
+        HashedKey = crypto:hash(sha, term_to_binary({<<"antidote">>, Key})),
+        abs(crypto:bytes_to_integer(HashedKey))
+    end;
+
+convert_key(Key) when is_integer(Key) ->
+    abs(Key);
+
+convert_key(TermKey) ->
+    HashedKey = crypto:hash(sha, term_to_binary({<<"antidote">>, term_to_binary(TermKey)})),
+    abs(crypto:bytes_to_integer(HashedKey)).
+
+-spec get_node_writeset(node(), ws()) -> partition_ws().
+get_node_writeset(Node, WS) ->
+    case orddict:find(Node, WS) of
+        error ->
+            orddict:new();
+        {ok, NodeWS} ->
+            NodeWS
+    end.
+
+-spec update_internal(connection(), term(), term(), ws()) -> ws().
+update_internal(Conn, Key, Value, WS) ->
+    Node = get_key_indexnode(Conn, Key),
+    NewNodeWS = orddict:store(Key, Value, get_node_writeset(Node, WS)),
+    orddict:store(Node, NewNodeWS, WS).
