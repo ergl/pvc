@@ -17,7 +17,7 @@
 -export_type([index_node/0]).
 
 %% Socket connection options
--define(conn_options, [binary, {active, false}, {packet, 2}, {nodelay, true}]).
+-define(CONN_OPTIONS, [binary, {active, false}, {packet, 2}, {nodelay, true}]).
 
 %% @doc Raw ring structure returned from antidote
 %%
@@ -35,7 +35,7 @@
 -record(conn, {
     %% The IP we're using to talk to the server
     %% Used to create a transaction id
-    self_ip :: string(),
+    self_ip :: binary(),
     %% Ring implemented as tuples for contant access
     ring :: {non_neg_integer(), fixed_ring()},
 
@@ -85,7 +85,7 @@
               abort/0,
               socket_error/0]).
 
--define(missing, erlang:error(not_implemented)).
+-define(UNIMPL, erlang:error(not_implemented)).
 
 %%====================================================================
 %% API functions
@@ -95,17 +95,20 @@
                                               | socket_error().
 
 connect(Address, Port) ->
-    case gen_tcp:connect(Address, Port, ?conn_options) of
+    case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
         {error, Reason} ->
             {error, Reason};
         {ok, Sock} ->
-            connect_1(Address, Port,  Sock)
+            connect1(Address, Port,  Sock)
     end.
 
--spec connect_1(inet:hostname(), inet:port_number(), inet:socket()) -> {ok, connection()}
-                                                                     | socket_error().
+-spec connect1(
+    ConnectedTo :: inet:hostname(),
+    Port :: inet:port_number(),
+    Socket :: inet:socket()
+) -> {ok, connection()} | socket_error().
 
-connect_1(ConnectedTo, Port, Socket) ->
+connect1(ConnectedTo, Port, Socket) ->
     ok = gen_tcp:send(Socket, ppb_protocol_driver:connect()),
     case gen_tcp:recv(Socket, 0) of
         {error, Reason} ->
@@ -114,8 +117,14 @@ connect_1(ConnectedTo, Port, Socket) ->
             {ok, RingSize, RawRing} = pvc_proto:decode_serv_reply(RawReply),
             UniqueNodes = unique_ring_nodes(RawRing),
             FixedRing = make_fixed_ring(RingSize, RawRing),
-            AllSockets = open_remote_sockets(Socket, UniqueNodes, ConnectedTo, Port),
-            {ok, #conn{self_ip=get_own_ip(Socket), ring={RingSize, FixedRing}, sockets=AllSockets}}
+            AllSockets = open_remote_sockets(Socket,
+                                             UniqueNodes,
+                                             ConnectedTo,
+                                             Port),
+
+            {ok, #conn{self_ip=get_own_ip(Socket),
+                       ring={RingSize, FixedRing},
+                       sockets=AllSockets}}
     end.
 
 %% @doc Start a new Transaction. Id should be unique for this node.
@@ -145,7 +154,12 @@ update(Conn, Tx = #tx_state{writeset=WS}, Key, Value) ->
     {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
 
 %% @doc Update a batch of keys. Old values are replaced with the new ones.
--spec update(connection(), transaction(), [{term(), term()}]) -> {ok, transaction()}.
+-spec update(
+    Conn :: connection(),
+    Tx :: transaction(),
+    Updates :: [{term(), term()}]
+) -> {ok, transaction()}.
+
 update(Conn, Tx = #tx_state{writeset=WS}, Updates) when is_list(Updates) ->
     NewWS = lists:foldl(fun({Key, Value}, AccWS) ->
         update_internal(Conn, Key, Value, AccWS)
@@ -157,7 +171,7 @@ commit(_Conn, #tx_state{read_only=true}) ->
     ok;
 
 commit(_Conn, _Tx) ->
-    ?missing.
+    ?UNIMPL.
 
 -spec close(connection()) -> ok.
 close(#conn{sockets=Sockets}) ->
@@ -199,7 +213,10 @@ make_fixed_ring(Size, RawRing) ->
 %%      nodes to an IP address, for easier matching with connection
 %%      sockets
 %%
--spec index_ring(raw_ring()) -> [{non_neg_integer(), {partition_id(), node_ip()}}].
+-spec index_ring(
+    RawRing :: raw_ring()
+) -> [{non_neg_integer(), {partition_id(), node_ip()}}].
+
 index_ring(RawRing) ->
     index_ring(RawRing, 1, []).
 
@@ -212,14 +229,17 @@ index_ring([{Partition, ErlangNode} | Rest], N, Acc) ->
 
 %% @doc Given a list of nodes, open sockets to all except to the one given
 -spec open_remote_sockets(
-    inet:socket(),
-    ordsets:ordset(node_ip()),
-    node_ip(),
-    inet:port_number()
+    Socket :: inet:socket(),
+    UniqueNodes :: ordsets:ordset(node_ip()),
+    ConnectedTo :: node_ip(),
+    Port :: inet:port_number()
 ) -> cluster_sockets().
 
 open_remote_sockets(Socket, UniqueNodes, ConnectedTo, Port) ->
-    open_remote_sockets_1(UniqueNodes, ConnectedTo, Port, [{ConnectedTo, Socket}]).
+    open_remote_sockets_1(UniqueNodes,
+                          ConnectedTo,
+                          Port,
+                          [{ConnectedTo, Socket}]).
 
 open_remote_sockets_1(Nodes, SelfNode, Port, Sockets) ->
     ordsets:fold(fun(Node, Acc) ->
@@ -228,7 +248,7 @@ open_remote_sockets_1(Nodes, SelfNode, Port, Sockets) ->
                 Acc;
 
             OtherNode ->
-                {ok, Sock} = gen_tcp:connect(OtherNode, Port, ?conn_options),
+                {ok, Sock} = gen_tcp:connect(OtherNode, Port, ?CONN_OPTIONS),
                 orddict:store(OtherNode, Sock, Acc)
         end
     end, Sockets, Nodes).
@@ -256,7 +276,9 @@ convert_key(Key) when is_integer(Key) ->
     abs(Key);
 
 convert_key(TermKey) ->
-    HashedKey = crypto:hash(sha, term_to_binary({<<"antidote">>, term_to_binary(TermKey)})),
+    %% Add bucket information
+    BinaryTerm = term_to_binary({<<"antidote">>, term_to_binary(TermKey)}),
+    HashedKey = crypto:hash(sha, BinaryTerm),
     abs(crypto:bytes_to_integer(HashedKey)).
 
 %%====================================================================
@@ -268,9 +290,12 @@ convert_key(TermKey) ->
 %%      On any error, return inmediately and stop reading further keys.
 %%      Will not return any read value in that case.
 %%
--spec read_batch(connection(), [term()], [term()], transaction()) -> {ok, [term()], transaction()}
-                                                                   | abort()
-                                                                   | socket_error().
+-spec read_batch(
+    connection(),
+    [term()],
+    [term()],
+    transaction()
+) -> {ok, [term()], transaction()} | abort() | socket_error().
 
 read_batch(_, [], ReadAcc, AccTx) ->
     {ok, lists:reverse(ReadAcc), AccTx};
@@ -285,9 +310,11 @@ read_batch(Conn, [Key | Rest], ReadAcc, AccTx) ->
             throw(Err)
     end.
 
--spec read_internal(term(), connection(), transaction()) -> {ok, term(), transaction()}
-                                                          | abort()
-                                                          | socket_error().
+-spec read_internal(
+    Key :: term(),
+    Conn :: connection(),
+    Tx :: transaction()
+) -> {ok, term(), transaction()} | abort() | socket_error().
 
 read_internal(Key, Conn=#conn{sockets=Sockets}, Tx=#tx_state{writeset=WS}) ->
     case key_updated(Conn, Key, WS) of
@@ -298,14 +325,18 @@ read_internal(Key, Conn=#conn{sockets=Sockets}, Tx=#tx_state{writeset=WS}) ->
             remote_read(IndexNode, Socket, Key, Tx)
     end.
 
--spec remote_read(index_node(), inet:socket(), term(), transaction()) -> {ok, term(), transaction()}
-                                                                       | abort()
-                                                                       | socket_error().
+-spec remote_read(
+    IndexNode :: index_node(),
+    Socket :: inet:socket(),
+    Key :: term(),
+    Tx :: transaction()
+) -> {ok, term(), transaction()} | abort() | socket_error().
 
-remote_read({Partition, _Node}=IndexNode, Socket, Key, Tx = #tx_state{vc_aggr=Aggr,
-                                                                      read_partitions=HasRead}) ->
-
-    ReadRequest = ppb_protocol_driver:read_request(Partition, Key, Aggr, HasRead),
+remote_read({Partition, _Node}=IndexNode, Socket, Key, Tx) ->
+    ReadRequest = ppb_protocol_driver:read_request(Partition,
+                                                   Key,
+                                                   Tx#tx_state.vc_aggr,
+                                                   Tx#tx_state.read_partitions),
     ok = gen_tcp:send(Socket, ReadRequest),
     case gen_tcp:recv(Socket, 0) of
         {error, Reason} ->
@@ -315,15 +346,24 @@ remote_read({Partition, _Node}=IndexNode, Socket, Key, Tx = #tx_state{vc_aggr=Ag
                 {error, Aborted} ->
                     {abort, Aborted};
                 {ok, Value, VersionVC, MaxVC} ->
-                    {ok, Value, update_transacion(IndexNode, VersionVC, MaxVC, Tx)}
+                    UpdatedTx = update_transacion(IndexNode,
+                                                  VersionVC,
+                                                  MaxVC,
+                                                  Tx),
+                    {ok, Value, UpdatedTx}
             end
     end.
 
 %% @doc Update a transaction after a read.
--spec update_transacion(index_node(), vc(), vc(), transaction()) -> transaction().
-update_transacion(IndexNode, VersionVC, MaxVC, Tx = #tx_state{vc_dep=VCdep,
-                                                              vc_aggr=VCaggr,
-                                                              read_partitions=HasRead}) ->
+-spec update_transacion(
+    IndexNode :: index_node(),
+    VersionVC :: vc(),
+    MaxVC :: vc(),
+    Tx :: transaction()
+) -> transaction().
+
+update_transacion(IndexNode, VersionVC, MaxVC, Tx) ->
+    #tx_state{vc_dep=VCdep, vc_aggr=VCaggr, read_partitions=HasRead} = Tx,
     Tx#tx_state{vc_dep = pvc_vclock:max(VersionVC, VCdep),
                 vc_aggr = pvc_vclock:max(MaxVC, VCaggr),
                 read_partitions = ordsets:add_element(IndexNode, HasRead)}.
@@ -338,7 +378,12 @@ update_transacion(IndexNode, VersionVC, MaxVC, Tx = #tx_state{vc_dep=VCdep,
 %%      Returns {ok, Value} if it was updated, or {false, Node} if not, where
 %%      Node is the remote Antidote node we should route or read request
 %%
--spec key_updated(connection(), term(), ws()) -> {ok, term()} | {false, index_node()}.
+-spec key_updated(
+    Con :: connection(),
+    Key :: term(),
+    WS :: ws()
+) -> {ok, term()} | {false, index_node()}.
+
 key_updated(Conn, Key, WS) ->
     Node = get_key_indexnode(Conn, Key),
     NodeWS = get_node_writeset(Node, WS),
