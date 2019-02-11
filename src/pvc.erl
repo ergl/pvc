@@ -44,13 +44,15 @@
 }).
 
 -type transaction_id() :: tuple().
--type partition_ws() :: orddict:orddict(term(), term()).
+-type partition_ws() :: pvc_writeset:ws(term(), term()).
 -type ws() :: orddict:orddict(index_node(), partition_ws()).
 
 %% FIXME(borja): Disparity with Antidote
 %% ordsets vs sets (what's more efficient on the wire?)
-%% Antidote stores _only_ partition ids, we store index nodes {partition_id, node_ip}
--type read_partitions() :: sets:set(index_node()).
+%%
+%% Antidote stores _only_ partition ids,
+%% we store index nodes {partition_id, node_ip}
+-type read_partitions() :: ordsets:ordset(index_node()).
 
 -type vc() :: pvc_vclock:vc(index_node()).
 
@@ -64,13 +66,13 @@
     %% Write set of the current transaction, partitioned
     %% by partition. This way, we can send to partitions
     %% only the subset they need to verify
-    writeset = [] :: ws(),
+    writeset = orddict:new() :: ws(),
     %% VC representing the read versions
     vc_dep = pvc_vclock:new() :: vc(),
     %% VC representing the max threshold of version that should be read
     vc_aggr = pvc_vclock:new() :: vc(),
     %% What partitions have we read before
-    read_partitions = sets:new() :: read_partitions()
+    read_partitions = ordsets:new() :: read_partitions()
 }).
 
 -opaque connection() :: #conn{}.
@@ -324,7 +326,7 @@ update_transacion(IndexNode, VersionVC, MaxVC, Tx = #tx_state{vc_dep=VCdep,
                                                               read_partitions=HasRead}) ->
     Tx#tx_state{vc_dep = pvc_vclock:max(VersionVC, VCdep),
                 vc_aggr = pvc_vclock:max(MaxVC, VCaggr),
-                read_partitions = sets:add_element(IndexNode, HasRead)}.
+                read_partitions = ordsets:add_element(IndexNode, HasRead)}.
 
 
 %%====================================================================
@@ -340,18 +342,13 @@ update_transacion(IndexNode, VersionVC, MaxVC, Tx = #tx_state{vc_dep=VCdep,
 key_updated(Conn, Key, WS) ->
     Node = get_key_indexnode(Conn, Key),
     NodeWS = get_node_writeset(Node, WS),
-    case orddict:find(Key, NodeWS) of
-        {ok, Value} ->
-            {ok, Value};
-        error ->
-            {false, Node}
-    end.
+    pvc_writeset:get(Key, NodeWS, {false, Node}).
 
--spec get_node_writeset(node(), ws()) -> partition_ws().
+-spec get_node_writeset(index_node(), ws()) -> partition_ws().
 get_node_writeset(Node, WS) ->
     case orddict:find(Node, WS) of
         error ->
-            orddict:new();
+            pvc_writeset:new();
         {ok, NodeWS} ->
             NodeWS
     end.
@@ -359,5 +356,5 @@ get_node_writeset(Node, WS) ->
 -spec update_internal(connection(), term(), term(), ws()) -> ws().
 update_internal(Conn, Key, Value, WS) ->
     Node = get_key_indexnode(Conn, Key),
-    NewNodeWS = orddict:store(Key, Value, get_node_writeset(Node, WS)),
+    NewNodeWS = pvc_writeset:put(Key, Value, get_node_writeset(Node, WS)),
     orddict:store(Node, NewNodeWS, WS).
