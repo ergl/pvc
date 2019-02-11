@@ -11,10 +11,7 @@
 
 -type node_ip() :: atom() | inet:ip_address().
 -type partition_id() :: non_neg_integer().
-
-%% FIXME(borja): Unexport once used
 -type index_node() :: {partition_id(), node_ip()}.
--export_type([index_node/0]).
 
 %% Socket connection options
 -define(CONN_OPTIONS, [binary, {active, false}, {packet, 2}, {nodelay, true}]).
@@ -52,6 +49,10 @@
 %%
 %% Antidote stores _only_ partition ids,
 %% we store index nodes {partition_id, node_ip}
+%%
+%% Remove read servers from antidote, so we can forget
+%% about the 'node' on their side
+%%
 -type read_partitions() :: ordsets:ordset(index_node()).
 
 -type vc() :: pvc_vclock:vc(index_node()).
