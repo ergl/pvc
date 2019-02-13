@@ -45,7 +45,7 @@
 -type ws() :: orddict:orddict(index_node(), partition_ws()).
 -type read_partitions() :: ordsets:ordset(partition_id()).
 
--type vc() :: pvc_vclock:vc(index_node()).
+-type vc() :: pvc_vclock:vc(partition_id()).
 
 -record(tx_state, {
     %% Identifier of the current transaction
