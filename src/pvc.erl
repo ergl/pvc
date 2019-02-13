@@ -157,12 +157,12 @@ update(Conn, Tx = #tx_state{writeset=WS}, Updates) when is_list(Updates) ->
     end, WS, Updates),
     {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
 
--spec commit(connection(), transaction()) -> ok | abort().
+-spec commit(connection(), transaction()) -> ok | abort() | socket_error().
 commit(_Conn, #tx_state{read_only=true}) ->
     ok;
 
-commit(_Conn, _Tx) ->
-    ?UNIMPL.
+commit(Conn, Tx) ->
+    commit_internal(Conn#conn.sockets, Tx).
 
 -spec close(connection()) -> ok.
 close(#conn{sockets=Sockets}) ->
@@ -394,3 +394,88 @@ update_internal(Conn, Key, Value, WS) ->
     Node = get_key_indexnode(Conn, Key),
     NewNodeWS = pvc_writeset:put(Key, Value, get_node_writeset(Node, WS)),
     orddict:store(Node, NewNodeWS, WS).
+
+%%====================================================================
+%% Commit Internal functions
+%%====================================================================
+
+-spec commit_internal(
+    cluster_sockets(),
+    transaction()
+) -> ok | abort() | socket_error().
+
+commit_internal(Sockets, Tx) ->
+    ok = send_prepare(Sockets, Tx),
+    case collect_votes(Sockets, Tx) of
+        {error, Reason} ->
+            %% TODO(borja): Handle socket error on collect votes
+            %% Socket error, should we flush Commit Queue on server?
+            %% (send abort)
+            {error, Reason};
+        Outcome ->
+%%            ok = send_decide(Sockets, Tx, Outcome),
+            result(Outcome)
+    end.
+
+-spec send_prepare(cluster_sockets(), transaction()) -> ok.
+send_prepare(Sockets, #tx_state{id=TxId, writeset=WS, vc_dep=VersionVC}) ->
+    orddict:fold(fun({Partition, NodeIP}, PartitionWS, ok) ->
+        Socket = orddict:fetch(NodeIP, Sockets),
+        Version = pvc_vclock:get_time(Partition, VersionVC),
+        PrepareMsg = ppb_protocol_driver:prepare(Partition,
+                                                 TxId,
+                                                 PartitionWS,
+                                                 Version),
+        gen_tcp:send(Socket, PrepareMsg)
+    end, ok, WS).
+
+%% FIXME(borja): Find better way to iterate through all sockets
+%% It would be good to build some structure during the transaction
+%% that makes the prepare/decide routine easier
+-spec collect_votes(
+    cluster_sockets(),
+    transaction()
+) -> {ok, vc()} | abort() | socket_error().
+
+collect_votes(Sockets, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
+    orddict:fold(fun({_, NodeIP}, _, Acc) ->
+        Socket = orddict:fetch(NodeIP, Sockets),
+        case gen_tcp:recv(Socket, 0) of
+            {error, Reason} ->
+                {error, Reason};
+            {ok, RawReply} ->
+                update_vote_acc(pvc_proto:decode_serv_reply(RawReply), Acc)
+        end
+    end, {ok, CommitVC}, WS).
+
+%%-spec send_decide(cluster_sockets(), transaction(), {ok, vc()} | abort()) -> ok.
+%%send_decide(Sockets, #tx_state{id=TxId, writeset=WS}, Outcome) ->
+%%    orddict:fold(fun({Partition, NodeIP}, _, ok) ->
+%%        Socket = orddict:fetch(NodeIP, Sockets),
+%%        gen_tcp:send(Socket, encode_decide(Partition, TxId, Outcome))
+%%    end, ok, WS).
+
+%% Vote / Acc can be
+%% either {error, Reason} or {error, Partition, Reason}
+%% The first one is socket error, the second is a negative Vote
+update_vote_acc(_, Acc) when element(1, Acc) =:= error ->
+    Acc;
+
+update_vote_acc(Vote, _) when element(1, Vote) =:= error ->
+    Vote;
+
+update_vote_acc({ok, Partition, Seq}, {ok, CommitVC}) ->
+    {ok, pvc_vclock:set_time(Partition, Seq, CommitVC)}.
+
+%%encode_decide(Partition, TxId, {error, _, _}) ->
+%%    ppb_protocol_driver:decide_abort(Partition, TxId);
+%%
+%%encode_decide(Partition, TxId, {ok, CommitVC}) ->
+%%    ppb_protocol_driver:decide_commit(Partition, TxId, CommitVC).
+
+-spec result({ok, vc()} | abort()) -> ok | abort().
+result({error, _, Reason}) ->
+    {abort, Reason};
+
+result({ok, _}) ->
+    ok.
