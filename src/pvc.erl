@@ -43,17 +43,7 @@
 -type transaction_id() :: tuple().
 -type partition_ws() :: pvc_writeset:ws(term(), term()).
 -type ws() :: orddict:orddict(index_node(), partition_ws()).
-
-%% FIXME(borja): Disparity with Antidote
-%% ordsets vs sets (what's more efficient on the wire?)
-%%
-%% Antidote stores _only_ partition ids,
-%% we store index nodes {partition_id, node_ip}
-%%
-%% Remove read servers from antidote, so we can forget
-%% about the 'node' on their side
-%%
--type read_partitions() :: ordsets:ordset(index_node()).
+-type read_partitions() :: ordsets:ordset(partition_id()).
 
 -type vc() :: pvc_vclock:vc(index_node()).
 
@@ -321,19 +311,19 @@ read_internal(Key, Conn=#conn{sockets=Sockets}, Tx=#tx_state{writeset=WS}) ->
     case key_updated(Conn, Key, WS) of
         {ok, Value} ->
             {ok, Value, Tx};
-        {false, {_, Node}=IndexNode} ->
-            Socket = orddict:fetch(Node, Sockets),
-            remote_read(IndexNode, Socket, Key, Tx)
+        {false, {Partition, NodeIP}} ->
+            Socket = orddict:fetch(NodeIP, Sockets),
+            remote_read(Partition, Socket, Key, Tx)
     end.
 
 -spec remote_read(
-    IndexNode :: index_node(),
+    Partition :: partition_id(),
     Socket :: inet:socket(),
     Key :: term(),
     Tx :: transaction()
 ) -> {ok, term(), transaction()} | abort() | socket_error().
 
-remote_read({Partition, _Node}=IndexNode, Socket, Key, Tx) ->
+remote_read(Partition, Socket, Key, Tx) ->
     ReadRequest = ppb_protocol_driver:read_request(Partition,
                                                    Key,
                                                    Tx#tx_state.vc_aggr,
@@ -347,7 +337,7 @@ remote_read({Partition, _Node}=IndexNode, Socket, Key, Tx) ->
                 {error, Aborted} ->
                     {abort, Aborted};
                 {ok, Value, VersionVC, MaxVC} ->
-                    UpdatedTx = update_transacion(IndexNode,
+                    UpdatedTx = update_transacion(Partition,
                                                   VersionVC,
                                                   MaxVC,
                                                   Tx),
@@ -357,17 +347,17 @@ remote_read({Partition, _Node}=IndexNode, Socket, Key, Tx) ->
 
 %% @doc Update a transaction after a read.
 -spec update_transacion(
-    IndexNode :: index_node(),
+    Partition :: partition_id(),
     VersionVC :: vc(),
     MaxVC :: vc(),
     Tx :: transaction()
 ) -> transaction().
 
-update_transacion(IndexNode, VersionVC, MaxVC, Tx) ->
+update_transacion(Partition, VersionVC, MaxVC, Tx) ->
     #tx_state{vc_dep=VCdep, vc_aggr=VCaggr, read_partitions=HasRead} = Tx,
     Tx#tx_state{vc_dep = pvc_vclock:max(VersionVC, VCdep),
                 vc_aggr = pvc_vclock:max(MaxVC, VCaggr),
-                read_partitions = ordsets:add_element(IndexNode, HasRead)}.
+                read_partitions = ordsets:add_element(Partition, HasRead)}.
 
 
 %%====================================================================
