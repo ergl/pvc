@@ -413,7 +413,7 @@ commit_internal(Sockets, Tx) ->
             %% (send abort)
             {error, Reason};
         Outcome ->
-%%            ok = send_decide(Sockets, Tx, Outcome),
+            ok = send_decide(Sockets, Tx, Outcome),
             result(Outcome)
     end.
 
@@ -448,12 +448,12 @@ collect_votes(Sockets, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
         end
     end, {ok, CommitVC}, WS).
 
-%%-spec send_decide(cluster_sockets(), transaction(), {ok, vc()} | abort()) -> ok.
-%%send_decide(Sockets, #tx_state{id=TxId, writeset=WS}, Outcome) ->
-%%    orddict:fold(fun({Partition, NodeIP}, _, ok) ->
-%%        Socket = orddict:fetch(NodeIP, Sockets),
-%%        gen_tcp:send(Socket, encode_decide(Partition, TxId, Outcome))
-%%    end, ok, WS).
+-spec send_decide(cluster_sockets(), transaction(), {ok, vc()} | abort()) -> ok.
+send_decide(Sockets, #tx_state{id=TxId, writeset=WS}, Outcome) ->
+    orddict:fold(fun({Partition, NodeIP}, _, ok) ->
+        Socket = orddict:fetch(NodeIP, Sockets),
+        gen_tcp:send(Socket, encode_decide(Partition, TxId, Outcome))
+    end, ok, WS).
 
 %% Vote / Acc can be
 %% either {error, Reason} or {error, Partition, Reason}
@@ -467,11 +467,11 @@ update_vote_acc(Vote, _) when element(1, Vote) =:= error ->
 update_vote_acc({ok, Partition, Seq}, {ok, CommitVC}) ->
     {ok, pvc_vclock:set_time(Partition, Seq, CommitVC)}.
 
-%%encode_decide(Partition, TxId, {error, _, _}) ->
-%%    ppb_protocol_driver:decide_abort(Partition, TxId);
-%%
-%%encode_decide(Partition, TxId, {ok, CommitVC}) ->
-%%    ppb_protocol_driver:decide_commit(Partition, TxId, CommitVC).
+encode_decide(Partition, TxId, {error, _, _}) ->
+    ppb_protocol_driver:decide_abort(Partition, TxId);
+
+encode_decide(Partition, TxId, {ok, CommitVC}) ->
+    ppb_protocol_driver:decide_commit(Partition, TxId, CommitVC).
 
 -spec result({ok, vc()} | abort()) -> ok | abort().
 result({error, _, Reason}) ->
