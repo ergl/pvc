@@ -2,8 +2,12 @@
 
 -include("pvc.hrl").
 
+%% Library lifetime management
+-export([start/0,
+         stop/0]).
+
 %% API exports
--export([new/3,
+-export([new/2,
          start_transaction/2,
          read/3,
          update/3,
@@ -12,7 +16,7 @@
          close/1]).
 
 
--type cluster_sockets() :: orddict:orddict(node_ip(), term()).
+-type cluster_conns() :: orddict:orddict(node_ip(), pvc_connection:connection()).
 
 -record(coord_state, {
     %% The IP we're using to talk to the server
@@ -23,7 +27,7 @@
     ring :: pvc_ring:ring(),
 
     %% Opened connection, one per node in the cluster
-    sockets :: cluster_sockets()
+    connections :: cluster_conns()
 }).
 
 -type transaction_id() :: tuple().
@@ -67,22 +71,40 @@
 %% API functions
 %%====================================================================
 
+%% @doc Initalize the library.
+%%
+%%      Since PVC depends on pipesock to handle the connections,
+%%      we need to start it beforehand.
+%%
+-spec start() -> ok | {error, Reason :: term()}.
+start() ->
+    application:ensure_started(pipesock).
+
+-spec stop() -> ok | {error, Reason :: term()}.
+stop() ->
+    application:stop(pipesock).
+
+%%====================================================================
+%% API functions
+%%====================================================================
+
 %% @doc Init the state of the coordinator
 %%
-%%      The coordinator needs the IP of the current machine
-%%      (to generate unique identifiers tied to this node),
-%%      a layout of the nodes in the cluster, and a list of
-%%      managed connections to each of those nodes.
+%%      The coordinator needs the layout of the nodes in the cluster,
+%%      and a list of {Ip, pvc_connection()} to each of those nodes.
 %%
 %%      Because we're using managed connections multiplexed
 %%      across different instances, we need the caller to supply
 %%      this extra state.
 %%
--spec new(SelfIP :: binary(), RingLayout :: pvc_ring:ring(), Connections :: cluster_sockets()) -> {ok, coord_state()}.
-new(SelfIP, RingLayout, Connections) ->
-    {ok, #coord_state{self_ip=SelfIP,
-               ring=RingLayout,
-               sockets=Connections}}.
+-spec new(RingLayout :: pvc_ring:ring(), Connections :: cluster_conns()) -> {ok, coord_state()}.
+new(RingLayout, Connections) ->
+    [{_, Connection}| _] = Connections,
+    %% All connections should have the same ip
+    SelfIp = pvc_connection:get_local_ip(Connection),
+    {ok, #coord_state{self_ip=SelfIp,
+                      ring=RingLayout,
+                      connections=Connections}}.
 
 %% @doc Start a new Transaction. Id should be unique for this node.
 -spec start_transaction(coord_state(), term()) -> {ok, transaction()}.
@@ -128,13 +150,13 @@ commit(_Conn, #tx_state{read_only=true}) ->
     ok;
 
 commit(Conn, Tx) ->
-    commit_internal(Conn#coord_state.sockets, Tx).
+    commit_internal(Conn#coord_state.connections, Tx).
 
 -spec close(coord_state()) -> ok.
-close(#coord_state{sockets=Sockets}) ->
-    orddict:fold(fun(_Node, Socket, ok) ->
-        gen_tcp:close(Socket)
-    end, ok, Sockets).
+close(#coord_state{connections=Conns}) ->
+    orddict:fold(fun(_Node, Connection, ok) ->
+        pvc_connection:close(Connection)
+    end, ok, Conns).
 
 %%====================================================================
 %% Read Internal functions
@@ -171,29 +193,30 @@ read_batch(State, [Key | Rest], ReadAcc, AccTx) ->
     Tx :: transaction()
 ) -> {ok, term(), transaction()} | abort() | socket_error().
 
-read_internal(Key, State=#coord_state{sockets=Sockets}, Tx=#tx_state{writeset=WS}) ->
+read_internal(Key, State=#coord_state{connections=Conns}, Tx=#tx_state{writeset=WS, id={_, Id}}) ->
     case key_updated(State, Key, WS) of
         {ok, Value} ->
             {ok, Value, Tx};
         {false, {Partition, NodeIP}} ->
-            Socket = orddict:fetch(NodeIP, Sockets),
-            remote_read(Partition, Socket, Key, Tx)
+            Connection = orddict:fetch(NodeIP, Conns),
+            remote_read(Id, Partition, Connection, Key, Tx)
     end.
 
 -spec remote_read(
+    MsgId :: non_neg_integer(),
     Partition :: partition_id(),
-    Socket :: inet:socket(),
+    Connection :: pvc_connection:connection(),
     Key :: term(),
     Tx :: transaction()
 ) -> {ok, term(), transaction()} | abort() | socket_error().
 
-remote_read(Partition, Socket, Key, Tx) ->
+remote_read(MsgId, Partition, Connection, Key, Tx) ->
     ReadRequest = ppb_protocol_driver:read_request(Partition,
                                                    Key,
                                                    Tx#tx_state.vc_aggr,
                                                    Tx#tx_state.read_partitions),
-    ok = gen_tcp:send(Socket, ReadRequest),
-    case gen_tcp:recv(Socket, 0) of
+
+    case pvc_connection:send(Connection, MsgId, ReadRequest, 5000) of
         {error, Reason} ->
             {error, Reason};
         {ok, RawReply} ->
@@ -264,59 +287,64 @@ update_internal(State, Key, Value, WS) ->
 %%====================================================================
 
 -spec commit_internal(
-    cluster_sockets(),
+    cluster_conns(),
     transaction()
 ) -> ok | abort() | socket_error().
 
-commit_internal(Sockets, Tx) ->
-    ok = send_prepare(Sockets, Tx),
-    case collect_votes(Sockets, Tx) of
+commit_internal(Connections, Tx) ->
+    ok = send_prepare(Connections, Tx),
+    case collect_votes(Connections, Tx) of
         {error, Reason} ->
             %% TODO(borja): Handle socket error on collect votes
             %% Socket error, should we flush Commit Queue on server?
             %% (send abort)
             {error, Reason};
         Outcome ->
-            ok = send_decide(Sockets, Tx, Outcome),
+            ok = send_decide(Connections, Tx, Outcome),
             result(Outcome)
     end.
 
--spec send_prepare(cluster_sockets(), transaction()) -> ok.
-send_prepare(Sockets, #tx_state{id=TxId, writeset=WS, vc_dep=VersionVC}) ->
+-spec send_prepare(cluster_conns(), transaction()) -> ok.
+send_prepare(Connections, #tx_state{id=TxId={_, MsgId}, writeset=WS, vc_dep=VersionVC}) ->
+    Self = self(),
     orddict:fold(fun({Partition, NodeIP}, PartitionWS, ok) ->
-        Socket = orddict:fetch(NodeIP, Sockets),
+        Connection = orddict:fetch(NodeIP, Connections),
         Version = pvc_vclock:get_time(Partition, VersionVC),
         PrepareMsg = ppb_protocol_driver:prepare(Partition,
                                                  TxId,
                                                  PartitionWS,
                                                  Version),
-        gen_tcp:send(Socket, PrepareMsg)
+
+        ok = pvc_connection:send_async(Connection, MsgId, PrepareMsg, fun(ConnRef, Reply) ->
+            Self ! {ConnRef, Reply}
+        end)
     end, ok, WS).
 
 %% FIXME(borja): Find better way to iterate through all sockets
 %% It would be good to build some structure during the transaction
 %% that makes the prepare/decide routine easier
 -spec collect_votes(
-    cluster_sockets(),
+    cluster_conns(),
     transaction()
 ) -> {ok, vc()} | abort() | socket_error().
 
-collect_votes(Sockets, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
+collect_votes(Connections, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
     orddict:fold(fun({_, NodeIP}, _, Acc) ->
-        Socket = orddict:fetch(NodeIP, Sockets),
-        case gen_tcp:recv(Socket, 0) of
-            {error, Reason} ->
-                {error, Reason};
-            {ok, RawReply} ->
+        Connection = orddict:fetch(NodeIP, Connections),
+        Ref = pvc_connection:get_ref(Connection),
+        receive
+            {Ref, RawReply} ->
                 update_vote_acc(pvc_proto:decode_serv_reply(RawReply), Acc)
         end
     end, {ok, CommitVC}, WS).
 
--spec send_decide(cluster_sockets(), transaction(), {ok, vc()} | abort()) -> ok.
-send_decide(Sockets, #tx_state{id=TxId, writeset=WS}, Outcome) ->
+-spec send_decide(cluster_conns(), transaction(), {ok, vc()} | abort()) -> ok.
+send_decide(Connections, #tx_state{id=TxId={_, MsgId}, writeset=WS}, Outcome) ->
     orddict:fold(fun({Partition, NodeIP}, _, ok) ->
-        Socket = orddict:fetch(NodeIP, Sockets),
-        gen_tcp:send(Socket, encode_decide(Partition, TxId, Outcome))
+        Connection = orddict:fetch(NodeIP, Connections),
+        DecideMsg = encode_decide(Partition, TxId, Outcome),
+        %% No reply necessary
+        ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
     end, ok, WS).
 
 %% Vote / Acc can be

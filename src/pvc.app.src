@@ -2,7 +2,7 @@
     [{description, "PVC client coordinator libaryr"},
      {vsn, "0.1.0"},
      {registered, []},
-     {applications, [kernel, stdlib]},
+     {applications, [kernel, stdlib, pipesock]},
      {env,[]},
      {modules, []},
      {maintainers, []},

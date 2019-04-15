@@ -49,11 +49,12 @@ partition_info(Address, Port) ->
 
 -spec partition_info_internal(gen_tcp:socket()) -> {ok, ring(), unique_nodes()} | socket_error().
 partition_info_internal(Socket) ->
-    ok = gen_tcp:send(Socket, ppb_protocol_driver:connect()),
+    %% FIXME(borja): Hack to fit in message identifiers
+    ok = gen_tcp:send(Socket, <<0:16, (ppb_protocol_driver:connect())/binary>>),
     case gen_tcp:recv(Socket, 0) of
         {error, Reason} ->
             {error, Reason};
-        {ok, RawReply} ->
+        {ok, <<0:16, RawReply/binary>>} ->
             {ok, RingSize, RawRing} = pvc_proto:decode_serv_reply(RawReply),
             UniqueNodes = unique_ring_nodes(RawRing),
             FixedRing = make_fixed_ring(RingSize, RawRing),
