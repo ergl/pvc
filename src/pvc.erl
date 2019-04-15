@@ -30,7 +30,10 @@
     connections :: cluster_conns()
 }).
 
--type transaction_id() :: tuple().
+%% An unique transaction id for this node ip,
+%% supplied by the caller
+-type transaction_id() :: {node_ip(), term()}.
+
 -type partition_ws() :: pvc_writeset:ws(term(), term()).
 -type ws() :: orddict:orddict(index_node(), partition_ws()).
 -type read_partitions() :: ordsets:ordset(partition_id()).
@@ -61,6 +64,7 @@
 -type abort() :: {abort, atom()}.
 
 -export_type([coord_state/0,
+              cluster_conns/0,
               transaction/0,
               abort/0,
               socket_error/0]).
