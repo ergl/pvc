@@ -16,7 +16,8 @@
          close/1]).
 
 
--type cluster_conns() :: orddict:orddict(node_ip(), pvc_connection:connection()).
+-type cluster_conns() :: orddict:orddict(node_ip(),
+                                         pvc_connection:connection()).
 
 -record(coord_state, {
     %% The IP we're using to talk to the server
@@ -212,9 +213,10 @@ read_batch(State, [Key | Rest], ReadAcc, AccTx) ->
     Tx :: transaction()
 ) -> {ok, term(), transaction()} | abort() | socket_error().
 
-read_internal(Key, State=#coord_state{connections=Conns, instance_id=Unique}, Tx=#tx_state{writeset=WS}) ->
+read_internal(Key, State=#coord_state{connections=Conns,
+                                      instance_id=Unique}, Tx) ->
 
-    case key_updated(State, Key, WS) of
+    case key_updated(State, Key, Tx#tx_state.writeset) of
         {ok, Value} ->
             {ok, Value, Tx};
         {false, {Partition, NodeIP}} ->
@@ -306,10 +308,9 @@ update_internal(State, Key, Value, WS) ->
 %% Commit Internal functions
 %%====================================================================
 
--spec commit_internal(
-    coord_state(),
-    transaction()
-) -> ok | abort() | socket_error().
+-spec commit_internal(coord_state(),
+                      transaction()) -> ok | abort() | socket_error().
+
 
 commit_internal(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
     ok = send_prepare(Connections, Unique, Tx),
@@ -325,7 +326,10 @@ commit_internal(#coord_state{connections=Connections, instance_id=Unique}, Tx) -
     end.
 
 -spec send_prepare(cluster_conns(), non_neg_integer(), transaction()) -> ok.
-send_prepare(Connections, MsgId, #tx_state{id=TxId, writeset=WS, vc_dep=VersionVC}) ->
+send_prepare(Connections, MsgId, #tx_state{id=TxId,
+                                           writeset=WS,
+                                           vc_dep=VersionVC}) ->
+
     Self = self(),
     orddict:fold(fun({Partition, NodeIP}, PartitionWS, ok) ->
         Connection = orddict:fetch(NodeIP, Connections),
@@ -358,7 +362,10 @@ collect_votes(Connections, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
         end
     end, {ok, CommitVC}, WS).
 
--spec send_decide(cluster_conns(), non_neg_integer(), transaction(), {ok, vc()} | abort()) -> ok.
+-spec send_decide(Connections :: cluster_conns(),
+                  MsgId :: non_neg_integer(),
+                  transaction(), {ok, vc()} | abort()) -> ok.
+
 send_decide(Connections, MsgId, #tx_state{id=TxId, writeset=WS}, Outcome) ->
     orddict:fold(fun({Partition, NodeIP}, _, ok) ->
         Connection = orddict:fetch(NodeIP, Connections),
