@@ -7,9 +7,8 @@
          stop/0]).
 
 %% API exports
--export([new/2,
+-export([new/3,
          start_transaction/2,
-         start_transaction/3,
          read/3,
          update/3,
          update/4,
@@ -28,7 +27,17 @@
     ring :: pvc_ring:ring(),
 
     %% Opened connection, one per node in the cluster
-    connections :: cluster_conns()
+    connections :: cluster_conns(),
+
+    %% An unique identifier for this coordinator instance
+    %% This identifier will be used for all messages sent
+    %% from this coordinator. At no point in the protocol
+    %% do we send two messages without waiting for a reply,
+    %% so there is no need to have more than one identifier
+    %% per instance. Message ids are opaque to the server,
+    %% so there is no possibility of conflict with other
+    %% machines.
+    instance_id :: non_neg_integer()
 }).
 
 %% An unique transaction id for this node ip,
@@ -40,16 +49,11 @@
 -type read_partitions() :: ordsets:ordset(partition_id()).
 
 -type vc() :: pvc_vclock:vc(partition_id()).
--type msg_id_gen() :: fun((transaction_id()) -> non_neg_integer()).
 
 -record(tx_state, {
     %% Identifier of the current transaction
     %% Must be unique among all other active transactions
     id :: transaction_id(),
-    %% Transaction-local message id generator
-    %% All pvc_connection messages must be tagged with an unique
-    %% identifier.
-    msg_id_gen :: msg_id_gen(),
     %% Marks if this transaction has been read-only so fat
     %% Read only transactions won't go through 2pc
     read_only = true :: boolean(),
@@ -71,7 +75,6 @@
 
 -export_type([coord_state/0,
               transaction_id/0,
-              msg_id_gen/0,
               cluster_conns/0,
               transaction/0,
               abort/0,
@@ -109,28 +112,23 @@ stop() ->
 %%      across different instances, we need the caller to supply
 %%      this extra state.
 %%
--spec new(RingLayout :: pvc_ring:ring(), Connections :: cluster_conns()) -> {ok, coord_state()}.
-new(RingLayout, Connections) ->
+-spec new(RingLayout :: pvc_ring:ring(),
+          Connections :: cluster_conns(),
+          Identifier :: non_neg_integer()) -> {ok, coord_state()}.
+
+new(RingLayout, Connections, Identifier) ->
     [{_, Connection}| _] = Connections,
     %% All connections should have the same ip
     SelfIp = pvc_connection:get_local_ip(Connection),
     {ok, #coord_state{self_ip=SelfIp,
+                      instance_id=Identifier,
                       ring=RingLayout,
                       connections=Connections}}.
 
 %% @doc Start a new Transaction. Id should be unique for this node.
 -spec start_transaction(coord_state(), term()) -> {ok, transaction()}.
-start_transaction(State, Id) ->
-    start_transaction(State, Id, fun({_, UserId}) -> UserId end).
-
-%% @doc Start a new Transaction. Id should be unique for this node.
-%%
-%%      Generator should create an unique integer on each call, to generate
-%%      message identifiers for this transaction.
-%%
--spec start_transaction(coord_state(), term(), msg_id_gen()) -> {ok, transaction()}.
-start_transaction(#coord_state{self_ip=IP}, Id, Generator) when is_function(Generator, 1)->
-    {ok, #tx_state{id={IP, Id}, msg_id_gen=Generator}}.
+start_transaction(#coord_state{self_ip=Ip}, Id) ->
+    {ok, #tx_state{id={Ip, Id}}}.
 
 %% @doc Read a key, or a list of keys.
 %%
@@ -170,8 +168,8 @@ update(State, Tx = #tx_state{writeset=WS}, Updates) when is_list(Updates) ->
 commit(_Conn, #tx_state{read_only=true}) ->
     ok;
 
-commit(Conn, Tx) ->
-    commit_internal(Conn#coord_state.connections, Tx).
+commit(State, Tx) ->
+    commit_internal(State, Tx).
 
 -spec close(coord_state()) -> ok.
 close(#coord_state{connections=Conns}) ->
@@ -214,16 +212,14 @@ read_batch(State, [Key | Rest], ReadAcc, AccTx) ->
     Tx :: transaction()
 ) -> {ok, term(), transaction()} | abort() | socket_error().
 
-read_internal(Key, State=#coord_state{connections=Conns}, Tx=#tx_state{writeset=WS,
-                                                                       id=TxId,
-                                                                       msg_id_gen=Gen}) ->
+read_internal(Key, State=#coord_state{connections=Conns, instance_id=Unique}, Tx=#tx_state{writeset=WS}) ->
 
     case key_updated(State, Key, WS) of
         {ok, Value} ->
             {ok, Value, Tx};
         {false, {Partition, NodeIP}} ->
             Connection = orddict:fetch(NodeIP, Conns),
-            remote_read(Gen(TxId), Partition, Connection, Key, Tx)
+            remote_read(Unique, Partition, Connection, Key, Tx)
     end.
 
 -spec remote_read(
@@ -311,12 +307,12 @@ update_internal(State, Key, Value, WS) ->
 %%====================================================================
 
 -spec commit_internal(
-    cluster_conns(),
+    coord_state(),
     transaction()
 ) -> ok | abort() | socket_error().
 
-commit_internal(Connections, Tx) ->
-    ok = send_prepare(Connections, Tx),
+commit_internal(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
+    ok = send_prepare(Connections, Unique, Tx),
     case collect_votes(Connections, Tx) of
         {error, Reason} ->
             %% TODO(borja): Handle socket error on collect votes
@@ -324,12 +320,12 @@ commit_internal(Connections, Tx) ->
             %% (send abort)
             {error, Reason};
         Outcome ->
-            ok = send_decide(Connections, Tx, Outcome),
+            ok = send_decide(Connections, Unique, Tx, Outcome),
             result(Outcome)
     end.
 
--spec send_prepare(cluster_conns(), transaction()) -> ok.
-send_prepare(Connections, #tx_state{id=TxId, msg_id_gen=Gen, writeset=WS, vc_dep=VersionVC}) ->
+-spec send_prepare(cluster_conns(), non_neg_integer(), transaction()) -> ok.
+send_prepare(Connections, MsgId, #tx_state{id=TxId, writeset=WS, vc_dep=VersionVC}) ->
     Self = self(),
     orddict:fold(fun({Partition, NodeIP}, PartitionWS, ok) ->
         Connection = orddict:fetch(NodeIP, Connections),
@@ -338,7 +334,7 @@ send_prepare(Connections, #tx_state{id=TxId, msg_id_gen=Gen, writeset=WS, vc_dep
                                                  TxId,
                                                  PartitionWS,
                                                  Version),
-        MsgId = Gen(TxId),
+
         ok = pvc_connection:send_async(Connection, MsgId, PrepareMsg, fun(ConnRef, Reply) ->
             Self ! {ConnRef, Reply}
         end)
@@ -362,13 +358,13 @@ collect_votes(Connections, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
         end
     end, {ok, CommitVC}, WS).
 
--spec send_decide(cluster_conns(), transaction(), {ok, vc()} | abort()) -> ok.
-send_decide(Connections, #tx_state{id=TxId, msg_id_gen=Gen, writeset=WS}, Outcome) ->
+-spec send_decide(cluster_conns(), non_neg_integer(), transaction(), {ok, vc()} | abort()) -> ok.
+send_decide(Connections, MsgId, #tx_state{id=TxId, writeset=WS}, Outcome) ->
     orddict:fold(fun({Partition, NodeIP}, _, ok) ->
         Connection = orddict:fetch(NodeIP, Connections),
         DecideMsg = encode_decide(Partition, TxId, Outcome),
         %% No reply necessary
-        ok = pvc_connection:send_cast(Connection, Gen(TxId), DecideMsg)
+        ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
     end, ok, WS).
 
 %% Vote / Acc can be
