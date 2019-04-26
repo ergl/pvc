@@ -216,6 +216,11 @@ read_batch(State, [Key | Rest], ReadAcc, AccTx) ->
 read_internal(Key, State=#coord_state{connections=Conns,
                                       instance_id=Unique}, Tx) ->
 
+    %% FIXME(borja): Test that this doesn't crash
+    %% Repro: update a key, then try to read it
+    %% this should fail with: No match of `x`,
+    %% key_updated returns either {false, _} or the _bare_ value,
+    %% but this expects {ok, Value}
     case key_updated(State, Key, Tx#tx_state.writeset) of
         {ok, Value} ->
             {ok, Value, Tx};
