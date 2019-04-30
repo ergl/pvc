@@ -15,6 +15,11 @@
          commit/2,
          close/1]).
 
+-ifdef(TEST).
+-export([prepare/2,
+         decide/3]).
+-endif.
+
 
 -type cluster_conns() :: orddict:orddict(node_ip(),
                                          pvc_connection:connection()).
@@ -166,9 +171,6 @@ update(State, Tx = #tx_state{writeset=WS}, Updates) when is_list(Updates) ->
     {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
 
 -spec commit(coord_state(), transaction()) -> ok | abort() | socket_error().
-commit(_Conn, #tx_state{read_only=true}) ->
-    ok;
-
 commit(State, Tx) ->
     commit_internal(State, Tx).
 
@@ -316,56 +318,50 @@ update_internal(State, Key, Value, WS) ->
 -spec commit_internal(coord_state(),
                       transaction()) -> ok | abort() | socket_error().
 
+commit_internal(State, Tx) ->
+    decide(State, Tx, prepare(State, Tx)).
 
-commit_internal(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
-    ok = send_prepare(Connections, Unique, Tx),
-    case collect_votes(Connections, Tx) of
-        {error, Reason} ->
-            %% TODO(borja): Handle socket error on collect votes
-            %% Socket error, should we flush Commit Queue on server?
-            %% (send abort)
-            {error, Reason};
-        Outcome ->
-            ok = send_decide(Connections, Unique, Tx, Outcome),
-            result(Outcome)
-    end.
+-spec prepare(coord_state(), transaction()) -> readonly | {ok, vc()} | abort() | socket_error().
+prepare(_, #tx_state{read_only=true}) -> readonly;
+prepare(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
+    prepare_internal(Connections, Unique, Tx).
 
--spec send_prepare(cluster_conns(), non_neg_integer(), transaction()) -> ok.
-send_prepare(Connections, MsgId, #tx_state{id=TxId,
-                                           writeset=WS,
-                                           vc_dep=VersionVC}) ->
+-spec prepare_internal(cluster_conns(), non_neg_integer(), transaction()) -> ok.
+prepare_internal(Connections, MsgId, #tx_state{id=TxId,
+                                               writeset=WS,
+                                               vc_dep=CommitVC}) ->
 
-    Self = self(),
-    orddict:fold(fun({Partition, NodeIP}, PartitionWS, ok) ->
+    orddict:fold(fun({Partition, NodeIP}, PartitionWS, Acc) ->
         Connection = orddict:fetch(NodeIP, Connections),
-        Version = pvc_vclock:get_time(Partition, VersionVC),
+        Version = pvc_vclock:get_time(Partition, CommitVC),
         PrepareMsg = ppb_protocol_driver:prepare(Partition,
                                                  TxId,
                                                  PartitionWS,
                                                  Version),
 
-        ok = pvc_connection:send_async(Connection, MsgId, PrepareMsg, fun(ConnRef, Reply) ->
-            Self ! {ConnRef, Reply}
-        end)
-    end, ok, WS).
-
-%% FIXME(borja): Find better way to iterate through all sockets
-%% It would be good to build some structure during the transaction
-%% that makes the prepare/decide routine easier
--spec collect_votes(
-    cluster_conns(),
-    transaction()
-) -> {ok, vc()} | abort() | socket_error().
-
-collect_votes(Connections, #tx_state{writeset=WS, vc_dep=CommitVC}) ->
-    orddict:fold(fun({_, NodeIP}, _, Acc) ->
-        Connection = orddict:fetch(NodeIP, Connections),
-        Ref = pvc_connection:get_ref(Connection),
-        receive
-            {Ref, RawReply} ->
-                update_vote_acc(pvc_proto:decode_serv_reply(RawReply), Acc)
-        end
+        %% FIXME(borja): Find a way to send all messages at once
+        %% With the approach we had before, we were using the same msg id for
+        %% different messages on the same connection. This worked fine if all
+        %% partitions are in different connections. But when sharing a connection,
+        %% it might be the case that we overwrite a callback, making the prepare/decide
+        %% phase faulty.
+        {ok, RawReply} = pvc_connection:send(Connection, MsgId, PrepareMsg, 5000),
+        update_vote_acc(pvc_proto:decode_serv_reply(RawReply), Acc)
     end, {ok, CommitVC}, WS).
+
+-spec decide(coord_state(),
+             transaction(),
+             readonly | {ok, vc()} | abort() | socket_error()) -> ok | abort() | socket_error().
+
+decide(_, _, readonly) -> ok;
+decide(_, _, {error, Reason}) ->
+    %% TODO(borja): Handle socket error on collect votes
+    %% Socket error, should we flush Commit Queue on server?
+    %% (send abort)
+    {error, Reason};
+decide(#coord_state{connections=Connections, instance_id=Unique}, Tx, Outcome) ->
+    ok = send_decide(Connections, Unique, Tx, Outcome),
+    result(Outcome).
 
 -spec send_decide(Connections :: cluster_conns(),
                   MsgId :: non_neg_integer(),
