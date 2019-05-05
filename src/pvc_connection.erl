@@ -4,6 +4,7 @@
 
 %% API
 -export([new/2,
+         new/3,
          get_ref/1,
          get_local_ip/1,
          send/4,
@@ -22,6 +23,12 @@
 
 new(Ip, Port) ->
     pipesock_conn:open(Ip, Port, #{id_len => 16}).
+
+-spec new(Ip :: node_ip(),
+          Port :: inet:port_number(),
+          Opts :: pipesock_conn:conn_opts()) -> {ok, connection()} | {error, term()}.
+new(Ip, Port, Opts) ->
+    pipesock_conn:open(Ip, Port, Opts).
 
 %% @doc Get the unique reference of the connection.
 %%
