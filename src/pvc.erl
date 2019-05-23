@@ -329,13 +329,13 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
                                             writeset=WS,
                                             vc_dep=CommitVC}) ->
     Self = self(),
-    OnReply = fun(_, Reply) -> Self ! {vote, Reply} end,
+    OnReply = fun(_, Reply) -> Self ! {node_vote, Reply} end,
     pvc_transaction_writeset:fold(fun(Node, Partitions, ToACK) ->
         Connection = orddict:fetch(Node, Connections),
         Prepares = build_prepares(CommitVC, Partitions),
         PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Prepares),
         pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply),
-        ToACK + length(Prepares)
+        ToACK + 1
     end, 0, WS).
 
 %% @doc Build the individual prepare messages for each partition
@@ -353,7 +353,7 @@ collect_votes(0, VoteAcc) ->
     VoteAcc;
 collect_votes(N, VoteAcc) ->
     Reply = receive
-        {vote, VoteReply} ->
+        {node_vote, VoteReply} ->
             pvc_proto:decode_serv_reply(VoteReply)
         after 5000 ->
             {error, timeout}
@@ -384,16 +384,20 @@ send_decide(Connections, MsgId, #tx_state{id=TxId, writeset=WS}, Outcome) ->
         ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
     end, ok, WS).
 
+%% @doc Update prepare accumulator with votes from a node
+update_vote_acc(Votes, Acc) ->
+    lists:foldl(fun update_vote_acc_internal/2, Acc, Votes).
+
 %% Vote / Acc can be
 %% either {error, Reason} or {error, Partition, Reason}
 %% The first one is socket error, the second is a negative Vote
-update_vote_acc(_, Acc) when element(1, Acc) =:= error ->
+update_vote_acc_internal(_, Acc) when element(1, Acc) =:= error ->
     Acc;
 
-update_vote_acc(Vote, _) when element(1, Vote) =:= error ->
+update_vote_acc_internal(Vote, _) when element(1, Vote) =:= error ->
     Vote;
 
-update_vote_acc({ok, Partition, Seq}, {ok, CommitVC}) ->
+update_vote_acc_internal({ok, Partition, Seq}, {ok, CommitVC}) ->
     {ok, pvc_vclock:set_time(Partition, Seq, CommitVC)}.
 
 encode_decide(Partition, TxId, {error, _, _}) ->
