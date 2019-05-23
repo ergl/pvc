@@ -50,8 +50,11 @@
 %% supplied by the caller
 -type transaction_id() :: {binary(), term()}.
 
--type partition_ws() :: pvc_writeset:ws(term(), term()).
--type ws() :: orddict:orddict(index_node(), partition_ws()).
+-type transaction_ws() :: pvc_transaction_writeset:ws().
+
+%% A key -> value cache for faster local reads
+-type value_cache() :: orddict:orddict(term(), term()).
+
 -type read_partitions() :: ordsets:ordset(partition_id()).
 
 -type vc() :: pvc_vclock:vc(partition_id()).
@@ -63,10 +66,12 @@
     %% Marks if this transaction has been read-only so fat
     %% Read only transactions won't go through 2pc
     read_only = true :: boolean(),
+    %% A local cache in sync with the writeset for faster local reads
+    read_local_cache = orddict:new() :: value_cache(),
     %% Write set of the current transaction, partitioned
-    %% by partition. This way, we can send to partitions
-    %% only the subset they need to verify
-    writeset = orddict:new() :: ws(),
+    %% by node and partition. This way, we can send
+    %% to partitions only the subset they need to verify
+    writeset = pvc_transaction_writeset:new() :: transaction_ws(),
     %% VC representing the read versions
     vc_dep = pvc_vclock:new() :: vc(),
     %% VC representing the max threshold of version that should be read
@@ -85,8 +90,6 @@
               transaction/0,
               abort/0,
               socket_error/0]).
-
--define(UNIMPL, erlang:error(not_implemented)).
 
 %%====================================================================
 %% API functions
@@ -153,9 +156,9 @@ read(State, Tx, Key) ->
 
 %% @doc Update the given Key. Old value is replaced with new one
 -spec update(coord_state(), transaction(), any(), any()) -> {ok, transaction()}.
-update(State, Tx = #tx_state{writeset=WS}, Key, Value) ->
-    NewWS = update_internal(State, Key, Value, WS),
-    {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
+update(State, Tx = #tx_state{read_local_cache=Cache, writeset=WS}, Key, Value) ->
+    {NewCache, NewWS} = update_internal(State, Key, Value, Cache, WS),
+    {ok, Tx#tx_state{read_only=false, writeset=NewWS, read_local_cache=NewCache}}.
 
 %% @doc Update a batch of keys. Old values are replaced with the new ones.
 -spec update(
@@ -164,11 +167,11 @@ update(State, Tx = #tx_state{writeset=WS}, Key, Value) ->
     Updates :: [{term(), term()}]
 ) -> {ok, transaction()}.
 
-update(State, Tx = #tx_state{writeset=WS}, Updates) when is_list(Updates) ->
-    NewWS = lists:foldl(fun({Key, Value}, AccWS) ->
-        update_internal(State, Key, Value, AccWS)
-    end, WS, Updates),
-    {ok, Tx#tx_state{read_only=false, writeset=NewWS}}.
+update(State, Tx = #tx_state{writeset=WS, read_local_cache=Cache}, Updates) when is_list(Updates) ->
+    {NewCache, NewWS} = lists:foldl(fun({Key, Value}, {AccCache, AccWS}) ->
+        update_internal(State, Key, Value, AccCache, AccWS)
+    end, {Cache, WS}, Updates),
+    {ok, Tx#tx_state{read_only=false, writeset=NewWS, read_local_cache=NewCache}}.
 
 -spec commit(coord_state(), transaction()) -> ok | abort() | socket_error().
 commit(State, Tx) ->
@@ -218,13 +221,8 @@ read_batch(State, [Key | Rest], ReadAcc, AccTx) ->
 read_internal(Key, State=#coord_state{connections=Conns,
                                       instance_id=Unique}, Tx) ->
 
-    %% FIXME(borja): Test that this doesn't crash
-    %% Repro: update a key, then try to read it
-    %% this should fail with: No match of `x`,
-    %% key_updated returns either {false, _} or the _bare_ value,
-    %% but this expects {ok, Value}
-    case key_updated(State, Key, Tx#tx_state.writeset) of
-        {ok, Value} ->
+    case key_updated(State, Key, Tx#tx_state.read_local_cache) of
+        {true, Value} ->
             {ok, Value, Tx};
         {false, {Partition, NodeIP}} ->
             Connection = orddict:fetch(NodeIP, Conns),
@@ -282,34 +280,30 @@ update_transacion(Partition, VersionVC, MaxVC, Tx) ->
 
 %% @doc Check if a key has an assoc value in the given transaction writeset
 %%
-%%      Returns {ok, Value} if it was updated, or {false, Node} if not, where
+%%      Returns {true, Value} if it was updated, or {false, Node} if not, where
 %%      Node is the remote Antidote node we should route or read request
 %%
 -spec key_updated(
     State :: coord_state(),
     Key :: term(),
-    WS :: ws()
-) -> {ok, term()} | {false, index_node()}.
+    Cache :: value_cache()
+) -> {true, term()} | {false, index_node()}.
 
-key_updated(State, Key, WS) ->
-    Node = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
-    NodeWS = get_node_writeset(Node, WS),
-    pvc_writeset:get(Key, NodeWS, {false, Node}).
-
--spec get_node_writeset(index_node(), ws()) -> partition_ws().
-get_node_writeset(Node, WS) ->
-    case orddict:find(Node, WS) of
+key_updated(State, Key, Cache) ->
+    case orddict:find(Key, Cache) of
+        {ok, Value} ->
+            {true, Value};
         error ->
-            pvc_writeset:new();
-        {ok, NodeWS} ->
-            NodeWS
+            Node = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
+            {false, Node}
     end.
 
--spec update_internal(coord_state(), term(), term(), ws()) -> ws().
-update_internal(State, Key, Value, WS) ->
-    Node = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
-    NewNodeWS = pvc_writeset:put(Key, Value, get_node_writeset(Node, WS)),
-    orddict:store(Node, NewNodeWS, WS).
+-spec update_internal(coord_state(), term(), term(), value_cache(), transaction_ws()) -> {value_cache(), transaction_ws()}.
+update_internal(State, Key, Value, Cache, WS) ->
+    NewCache = orddict:store(Key, Value, Cache),
+    IndexNode = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
+    NewWS = pvc_transaction_writeset:put(IndexNode, Key, Value, WS),
+    {NewCache, NewWS}.
 
 %%====================================================================
 %% Commit Internal functions
