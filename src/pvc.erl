@@ -377,11 +377,12 @@ decide(#coord_state{connections=Connections, instance_id=Unique}, Tx, Outcome) -
                   transaction(), {ok, vc()} | abort()) -> ok.
 
 send_decide(Connections, MsgId, #tx_state{id=TxId, writeset=WS}, Outcome) ->
-    orddict:fold(fun({Partition, NodeIP}, _, ok) ->
-        Connection = orddict:fetch(NodeIP, Connections),
-        DecideMsg = encode_decide(Partition, TxId, Outcome),
+    pvc_transaction_writeset:fold(fun(Node, Partitions, ok) ->
+        Connection = orddict:fetch(Node, Connections),
         %% No reply necessary
-        ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
+        [pvc_connection:send_cast(Connection, MsgId, encode_decide(P, TxId, Outcome))
+            || {P, _} <- Partitions],
+        ok
     end, ok, WS).
 
 %% @doc Update prepare accumulator with votes from a node
