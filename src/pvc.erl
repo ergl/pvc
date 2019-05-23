@@ -174,8 +174,8 @@ update(State, Tx = #tx_state{writeset=WS, read_local_cache=Cache}, Updates) when
     {ok, Tx#tx_state{read_only=false, writeset=NewWS, read_local_cache=NewCache}}.
 
 -spec commit(coord_state(), transaction()) -> ok | abort() | socket_error().
-commit(State, Tx) ->
-    commit_internal(State, Tx).
+commit(_Conn, #tx_state{read_only=true}) -> ok;
+commit(State, Tx) -> commit_internal(State, Tx).
 
 -spec close(coord_state()) -> ok.
 close(#coord_state{connections=Conns}) ->
@@ -315,44 +315,59 @@ update_internal(State, Key, Value, Cache, WS) ->
 commit_internal(State, Tx) ->
     decide(State, Tx, prepare(State, Tx)).
 
--spec prepare(coord_state(), transaction()) -> readonly | {ok, vc()} | abort() | socket_error().
-prepare(_, #tx_state{read_only=true}) -> readonly;
+-spec prepare(coord_state(), transaction()) -> {ok, vc()} | abort() | socket_error().
 prepare(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
-    prepare_internal(Connections, Unique, Tx).
+    ToAck = send_prepares(Connections, Unique, Tx),
+    collect_votes(ToAck, {ok, Tx#tx_state.vc_dep}).
 
--spec prepare_internal(cluster_conns(), non_neg_integer(), transaction()) -> ok.
-prepare_internal(Connections, MsgId, #tx_state{id=TxId,
-                                               writeset=WS,
-                                               vc_dep=CommitVC}) ->
+%% @doc Send all the prepare messages in parallel
+%%
+%%      Replies with the number of partitions we need to ack
+%%
+-spec send_prepares(cluster_conns(), non_neg_integer(), transaction()) -> non_neg_integer().
+send_prepares(Connections, MsgId, #tx_state{id=TxId,
+                                            writeset=WS,
+                                            vc_dep=CommitVC}) ->
+    Self = self(),
+    OnReply = fun(_, Reply) -> Self ! {vote, Reply} end,
+    pvc_transaction_writeset:fold(fun(Node, Partitions, ToACK) ->
+        Connection = orddict:fetch(Node, Connections),
+        Prepares = build_prepares(CommitVC, Partitions),
+        PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Prepares),
+        pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply),
+        ToACK + length(Prepares)
+    end, 0, WS).
 
-    orddict:fold(fun({Partition, NodeIP}, PartitionWS, Acc) ->
-        Connection = orddict:fetch(NodeIP, Connections),
-        Version = pvc_vclock:get_time(Partition, CommitVC),
-        PrepareMsg = ppb_protocol_driver:prepare(Partition,
-                                                 TxId,
-                                                 PartitionWS,
-                                                 Version),
+%% @doc Build the individual prepare messages for each partition
+build_prepares(CommitVC, Partitions) ->
+    [{Partition, PWS, pvc_vclock:get_time(Partition, CommitVC)} || {Partition, PWS} <- Partitions].
 
-        %% FIXME(borja): Find a way to send all messages at once
-        %% With the approach we had before, we were using the same msg id for
-        %% different messages on the same connection. This worked fine if all
-        %% partitions are in different connections. But when sharing a connection,
-        %% it might be the case that we overwrite a callback, making the prepare/decide
-        %% phase faulty.
-        {ok, RawReply} = pvc_connection:send(Connection, MsgId, PrepareMsg, 5000),
-        update_vote_acc(pvc_proto:decode_serv_reply(RawReply), Acc)
-    end, {ok, CommitVC}, WS).
+%% @doc Collect all the votes by all the partitions
+%%
+%%      We collect all even if the first one is an abort, as we don't
+%%      want the process to have messages in the queue.
+%%
+-spec collect_votes(non_neg_integer(),
+                    {ok, vc()} | abort() | socket_error()) -> {ok, vc()} | abort() | socket_error().
+collect_votes(0, VoteAcc) ->
+    VoteAcc;
+collect_votes(N, VoteAcc) ->
+    Reply = receive
+        {vote, VoteReply} ->
+            pvc_proto:decode_serv_reply(VoteReply)
+        after 5000 ->
+            {error, timeout}
+    end,
+    collect_votes(N - 1, update_vote_acc(Reply, VoteAcc)).
 
 -spec decide(coord_state(),
              transaction(),
-             readonly | {ok, vc()} | abort() | socket_error()) -> ok | abort() | socket_error().
+             {ok, vc()} | abort() | socket_error()) -> ok | abort() | socket_error().
 
-decide(_, _, readonly) -> ok;
-decide(_, _, {error, Reason}) ->
-    %% TODO(borja): Handle socket error on collect votes
-    %% Socket error, should we flush Commit Queue on server?
-    %% (send abort)
-    {error, Reason};
+%% TODO(borja): Handle socket error on collect votes
+%% Socket error, should we flush Commit Queue on server?
+%% (send abort)
+decide(_, _, {error, Reason}) -> {error, Reason};
 decide(#coord_state{connections=Connections, instance_id=Unique}, Tx, Outcome) ->
     ok = send_decide(Connections, Unique, Tx, Outcome),
     result(Outcome).

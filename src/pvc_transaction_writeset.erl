@@ -8,11 +8,12 @@
 -type partition_writesets() :: orddict:orddict(partition_id(), inner_writeset()).
 -type ws() :: orddict:orddict(node_ip(), partition_writesets()).
 
--export_type([ws/0]).
+-export_type([ws/0, partition_writesets/0, inner_writeset/0]).
 
 %% API
 -export([new/0,
-         put/4]).
+         put/4,
+         fold/3]).
 
 -spec new() -> ws().
 new() ->
@@ -42,3 +43,7 @@ find_or_else(Key, Default, Dict) ->
         error -> Default;
         {ok, Val} -> Val
     end.
+
+-spec fold(fun((node_ip(), partition_writesets(), term()) -> term()), term(), ws()) -> term().
+fold(Fun, Acc, WS) ->
+    orddict:fold(Fun, Acc, WS).
