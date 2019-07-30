@@ -225,6 +225,7 @@ read_internal(Key, State=#coord_state{connections=Conns,
         {true, Value} ->
             {ok, Value, Tx};
         {false, {Partition, NodeIP}} ->
+            io:fwrite(standard_error, "~p: ~p from {~p, ~p}~n", [?FUNCTION_NAME, Key, Partition, NodeIP]),
             Connection = orddict:fetch(NodeIP, Conns),
             remote_read(Unique, Partition, Connection, Key, Tx)
     end.
