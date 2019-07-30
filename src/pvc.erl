@@ -352,13 +352,14 @@ build_prepares(CommitVC, Partitions) ->
 collect_votes(0, VoteAcc) ->
     VoteAcc;
 collect_votes(N, VoteAcc) ->
-    Reply = receive
+    receive
         {node_vote, VoteReply} ->
-            pvc_proto:decode_serv_reply(VoteReply)
+            Reply = pvc_proto:decode_serv_reply(VoteReply),
+            collect_votes(N - 1, update_vote_acc(Reply, VoteAcc))
         after 5000 ->
-            {error, timeout}
-    end,
-    collect_votes(N - 1, update_vote_acc(Reply, VoteAcc)).
+            io:fwrite(standard_error, "Missed deadline for vote ~b. Retrying~n", [N]),
+            collect_votes(N, VoteAcc)
+    end.
 
 -spec decide(coord_state(),
              transaction(),
