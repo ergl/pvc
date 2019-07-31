@@ -328,6 +328,7 @@ prepare(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
 send_prepares(Connections, MsgId, #tx_state{id=TxId,
                                             writeset=WS,
                                             vc_dep=CommitVC}) ->
+    %% FIXME(borja): Getting read replies here, should generate a reference?
     Self = self(),
     OnReply = fun(_, Reply) -> Self ! {node_vote, Reply} end,
     pvc_transaction_writeset:fold(fun(Node, Partitions, ToACK) ->
