@@ -243,6 +243,7 @@ remote_read(MsgId, Partition, Connection, Key, Tx) ->
                                                    Tx#tx_state.vc_aggr,
                                                    Tx#tx_state.read_partitions),
 
+    io:fwrite(standard_error, "{~p} ~p [~p]~n", [Tx#tx_state.id, ?FUNCTION_NAME, MsgId]),
     case pvc_connection:send(Connection, MsgId, ReadRequest, 5000) of
         {error, Reason} ->
             {error, Reason};
@@ -335,6 +336,7 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
         Connection = orddict:fetch(Node, Connections),
         Prepares = build_prepares(CommitVC, Partitions),
         PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Prepares),
+        io:fwrite(standard_error, "{~p} ~p [~p]~n", [TxId, ?FUNCTION_NAME, MsgId]),
         pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply),
         ToACK + 1
     end, 0, WS).
