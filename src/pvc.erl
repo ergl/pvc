@@ -319,7 +319,7 @@ commit_internal(State, Tx) ->
 -spec prepare(coord_state(), transaction()) -> {ok, vc()} | abort() | socket_error().
 prepare(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
     ToAck = send_prepares(Connections, Unique, Tx),
-    collect_votes(ToAck, {ok, Tx#tx_state.vc_dep}).
+    collect_votes(ToAck, {ok, Tx#tx_state.vc_dep}, Tx#tx_state.id).
 
 %% @doc Send all the prepare messages in parallel
 %%
@@ -351,17 +351,17 @@ build_prepares(CommitVC, Partitions) ->
 %%      want the process to have messages in the queue.
 %%
 -spec collect_votes(non_neg_integer(),
-                    {ok, vc()} | abort() | socket_error()) -> {ok, vc()} | abort() | socket_error().
-collect_votes(0, VoteAcc) ->
+                    {ok, vc()} | abort() | socket_error(), transaction_id()) -> {ok, vc()} | abort() | socket_error().
+collect_votes(0, VoteAcc, _) ->
     VoteAcc;
-collect_votes(N, VoteAcc) ->
+collect_votes(N, VoteAcc, TxId) ->
     receive
         {node_vote, VoteReply} ->
             Reply = pvc_proto:decode_serv_reply(VoteReply),
-            collect_votes(N - 1, update_vote_acc(Reply, VoteAcc))
+            collect_votes(N - 1, update_vote_acc(Reply, VoteAcc), TxId)
         after 5000 ->
-            io:fwrite(standard_error, "Missed deadline for vote ~b. Retrying~n", [N]),
-            collect_votes(N, VoteAcc)
+            io:fwrite(standard_error, "{~p} Missed deadline for vote ~b. Retrying~n", [TxId, N]),
+            collect_votes(N, VoteAcc, TxId)
     end.
 
 -spec decide(coord_state(),
