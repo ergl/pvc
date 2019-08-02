@@ -1,6 +1,6 @@
 {application, pvc,
     [{description, "PVC client coordinator libaryr"},
-     {vsn, "0.5.3"},
+     {vsn, "0.6.0"},
      {registered, []},
      {applications, [kernel, stdlib, pipesock]},
      {env,[]},
