@@ -145,8 +145,7 @@ start_transaction(#coord_state{self_ip=Ip}, Id) ->
 %%      in the same order as the original keys.
 %%
 -spec read(coord_state(), transaction(), any()) -> {ok, any(), transaction()}
-                                                | abort()
-                                                | socket_error().
+                                                 | abort().
 
 read(State, Tx, Keys) when is_list(Keys) ->
     catch read_batch(State, Keys, [], Tx);
@@ -197,7 +196,7 @@ close(#coord_state{connections=Conns}) ->
     [term()],
     [term()],
     transaction()
-) -> {ok, [term()], transaction()} | abort() | socket_error().
+) -> {ok, [term()], transaction()} | abort().
 
 read_batch(_, [], ReadAcc, AccTx) ->
     {ok, lists:reverse(ReadAcc), AccTx};
@@ -207,16 +206,14 @@ read_batch(State, [Key | Rest], ReadAcc, AccTx) ->
         {ok, Value, NewTx} ->
             read_batch(State, Rest, [Value | ReadAcc], NewTx);
         {abort, _}=Abort ->
-            throw(Abort);
-        {error, _}=Err ->
-            throw(Err)
+            throw(Abort)
     end.
 
 -spec read_internal(
     Key :: term(),
     State :: coord_state(),
     Tx :: transaction()
-) -> {ok, term(), transaction()} | abort() | socket_error().
+) -> {ok, term(), transaction()} | abort().
 
 read_internal(Key, State=#coord_state{connections=Conns,
                                       instance_id=Unique}, Tx) ->
@@ -235,7 +232,7 @@ read_internal(Key, State=#coord_state{connections=Conns,
     Connection :: pvc_connection:connection(),
     Key :: term(),
     Tx :: transaction()
-) -> {ok, term(), transaction()} | abort() | socket_error().
+) -> {ok, term(), transaction()} | abort().
 
 remote_read(MsgId, Partition, Connection, Key, Tx) ->
     ReadRequest = ppb_protocol_driver:read_request(Partition,
@@ -244,20 +241,16 @@ remote_read(MsgId, Partition, Connection, Key, Tx) ->
                                                    Tx#tx_state.read_partitions),
 
     io:fwrite(standard_error, "{~p} ~p [~p]~n", [Tx#tx_state.id, ?FUNCTION_NAME, MsgId]),
-    case pvc_connection:send(Connection, MsgId, ReadRequest, 5000) of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, RawReply} ->
-            case pvc_proto:decode_serv_reply(RawReply) of
-                {error, Aborted} ->
-                    {abort, Aborted};
-                {ok, Value, VersionVC, MaxVC} ->
-                    UpdatedTx = update_transacion(Partition,
-                                                  VersionVC,
-                                                  MaxVC,
-                                                  Tx),
-                    {ok, Value, UpdatedTx}
-            end
+    {ok, RawReply} = pvc_connection:send(Connection, MsgId, ReadRequest),
+    case pvc_proto:decode_serv_reply(RawReply) of
+        {error, Aborted} ->
+            {abort, Aborted};
+        {ok, Value, VersionVC, MaxVC} ->
+            UpdatedTx = update_transacion(Partition,
+                                          VersionVC,
+                                          MaxVC,
+                                          Tx),
+            {ok, Value, UpdatedTx}
     end.
 
 %% @doc Update a transaction after a read.
@@ -411,6 +404,9 @@ encode_decide(Partition, TxId, {error, _, _}) ->
 encode_decide(Partition, TxId, {ok, CommitVC}) ->
     ppb_protocol_driver:decide_commit(Partition, TxId, CommitVC).
 
+%% FIXME(borja): Types
+%% abort() is defined as {abort, _}
+%% Does this function ever get a negative vote?
 -spec result({ok, vc()} | abort()) -> ok | abort().
 result({error, _, Reason}) ->
     {abort, Reason};

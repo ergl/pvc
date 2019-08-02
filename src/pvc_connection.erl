@@ -7,15 +7,18 @@
          new/3,
          get_ref/1,
          get_local_ip/1,
+         send/3,
          send/4,
          send_async/4,
          send_cast/3,
          close/1]).
 
 -type connection() :: pipesock_conn:conn_handle().
--export_type([connection/0]).
+-type conn_timeout() :: pipesock_conn:conn_timeout().
+-export_type([connection/0, conn_timeout/0]).
 
--define(VALID_SEND_SYNC(A, B), is_integer(A) andalso is_binary(B)).
+-define(VALID_TIMEOUT(T), T =:= infinity orelse is_integer(T)).
+-define(VALID_SEND_SYNC(A, B), ?VALID_TIMEOUT(A) andalso is_binary(B)).
 -define(VALID_SEND_ASYNC(A, B), is_function(A, 2) andalso is_binary(B)).
 
 -spec new(Ip :: node_ip(),
@@ -49,8 +52,15 @@ get_local_ip(Handle) ->
 %%
 -spec send(Handle :: connection(),
            MsgId :: non_neg_integer(),
+           Msg :: binary()) -> {ok, term()}.
+
+send(Handle, MsgId, Msg) ->
+    send(Handle, MsgId, Msg, infinity).
+
+-spec send(Handle :: connection(),
+           MsgId :: non_neg_integer(),
            Msg :: binary(),
-           Timeout :: non_neg_integer()) -> {ok, term()} | {error, timeout}.
+           Timeout :: conn_timeout()) -> {ok, term()} | {error, timeout}.
 
 send(Handle, MsgId, Msg, Timeout) when ?VALID_SEND_SYNC(Timeout, Msg) ->
     case pipesock_conn:send_sync(Handle, wrap_msg(Handle, MsgId, Msg), Timeout) of
