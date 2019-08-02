@@ -240,7 +240,6 @@ remote_read(MsgId, Partition, Connection, Key, Tx) ->
                                                    Tx#tx_state.vc_aggr,
                                                    Tx#tx_state.read_partitions),
 
-    io:fwrite(standard_error, "{~p} ~p [~p]~n", [Tx#tx_state.id, ?FUNCTION_NAME, MsgId]),
     {ok, RawReply} = pvc_connection:send(Connection, MsgId, ReadRequest),
     case pvc_proto:decode_serv_reply(RawReply) of
         {error, Aborted} ->
@@ -312,7 +311,7 @@ commit_internal(State, Tx) ->
 -spec prepare(coord_state(), transaction()) -> {ok, vc()} | abort() | socket_error().
 prepare(#coord_state{connections=Connections, instance_id=Unique}, Tx) ->
     ToAck = send_prepares(Connections, Unique, Tx),
-    collect_votes(ToAck, {ok, Tx#tx_state.vc_dep}, Tx#tx_state.id).
+    collect_votes(ToAck, {ok, Tx#tx_state.vc_dep}).
 
 %% @doc Send all the prepare messages in parallel
 %%
@@ -329,7 +328,6 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
         Connection = orddict:fetch(Node, Connections),
         Prepares = build_prepares(CommitVC, Partitions),
         PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Prepares),
-        io:fwrite(standard_error, "{~p} ~p [~p]~n", [TxId, ?FUNCTION_NAME, MsgId]),
         pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply),
         ToACK + 1
     end, 0, WS).
@@ -344,17 +342,16 @@ build_prepares(CommitVC, Partitions) ->
 %%      want the process to have messages in the queue.
 %%
 -spec collect_votes(non_neg_integer(),
-                    {ok, vc()} | abort() | socket_error(), transaction_id()) -> {ok, vc()} | abort() | socket_error().
-collect_votes(0, VoteAcc, _) ->
+                    {ok, vc()} | abort() | socket_error()) -> {ok, vc()} | abort() | socket_error().
+collect_votes(0, VoteAcc) ->
     VoteAcc;
-collect_votes(N, VoteAcc, TxId) ->
+collect_votes(N, VoteAcc) ->
     receive
         {node_vote, VoteReply} ->
             Reply = pvc_proto:decode_serv_reply(VoteReply),
-            collect_votes(N - 1, update_vote_acc(Reply, VoteAcc), TxId)
+            collect_votes(N - 1, update_vote_acc(Reply, VoteAcc))
         after 5000 ->
-            io:fwrite(standard_error, "{~p} Missed deadline for vote ~b. Retrying~n", [TxId, N]),
-            collect_votes(N, VoteAcc, TxId)
+            collect_votes(N, VoteAcc)
     end.
 
 -spec decide(coord_state(),
