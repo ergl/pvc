@@ -333,8 +333,15 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
     end, 0, WS).
 
 %% @doc Build the individual prepare messages for each partition
+-spec build_prepares(
+    CommitVC :: vc(),
+    Partitions :: pvc_transaction_writeset:partitions_writeset()
+) -> [{partition_id(), #{term() => term()}, non_neg_integer()}, ...].
+
 build_prepares(CommitVC, Partitions) ->
-    [{Partition, PWS, pvc_vclock:get_time(Partition, CommitVC)} || {Partition, PWS} <- Partitions].
+    maps:fold(fun(Partition, PWS, Acc) ->
+        [{Partition, PWS, pvc_vclock:get_time(Partition, CommitVC)} | Acc]
+    end, [], Partitions).
 
 %% @doc Collect all the votes by all the partitions
 %%
@@ -375,7 +382,7 @@ send_decide(Connections, MsgId, #tx_state{id=TxId, writeset=WS}, Outcome) ->
         Connection = orddict:fetch(Node, Connections),
         %% No reply necessary
         [pvc_connection:send_cast(Connection, MsgId, encode_decide(P, TxId, Outcome))
-            || {P, _} <- Partitions],
+            || P <- maps:keys(Partitions)],
         ok
     end, ok, WS).
 
