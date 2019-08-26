@@ -8,5 +8,5 @@
   0},
  {<<"pvc_types">>,
   {git,"https://github.com/ergl/pvc_types.git",
-       {ref,"906740bf29b973eca4539a3e166bbf0870786769"}},
+       {ref,"f9f34cca44273e0de791e0bbceb0806eaadc71ca"}},
   0}].
