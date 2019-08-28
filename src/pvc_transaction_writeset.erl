@@ -6,7 +6,7 @@
 %% for easier batching during the 2pc phase
 -type partitions_writeset() :: #{partition_id() => #{term() => term()}}.
 -type ws() :: #{node_ip() => partitions_writeset()}.
--export_type([ws/0,partitions_writeset/0]).
+-export_type([ws/0, partitions_writeset/0]).
 
 %% API
 -export([new/0,

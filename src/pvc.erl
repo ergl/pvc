@@ -427,7 +427,9 @@ build_prepares(CommitVC, Partitions) ->
 %%      want the process to have messages in the queue.
 %%
 -spec collect_votes(non_neg_integer(),
-                    {ok, vc()} | abort() | socket_error()) -> {ok, vc()} | abort() | socket_error().
+                    {ok, vc()} | abort() | socket_error()) -> {ok, vc()}
+                                                            | abort()
+                                                            | socket_error().
 collect_votes(0, VoteAcc) ->
     VoteAcc;
 collect_votes(N, VoteAcc) ->
@@ -459,7 +461,9 @@ send_decide(Connections, MsgId, #tx_state{id=TxId, protocol_state=ProtState}, Ou
     ForEach = fun(Protocol, Node, Partitions) ->
         Connection = orddict:fetch(Node, Connections),
         %% No reply necessary
-        [pvc_connection:send_cast(Connection, MsgId, encode_decide(P, TxId, Protocol, Outcome))
+        [pvc_connection:send_cast(Connection,
+                                  MsgId,
+                                  encode_decide(P, TxId, Protocol, Outcome))
             || P <- maps:keys(Partitions)]
     end,
 
@@ -501,7 +505,9 @@ result({ok, _}) ->
 %% Generic Util functions
 %%====================================================================
 
--spec for_each_node_count(protocol_state(), fun((...) -> ok)) -> non_neg_integer().
+-spec for_each_node_count(protocol_state(),
+                          fun((...) -> ok)) -> non_neg_integer().
+
 for_each_node_count(ProtState, Fun) ->
     node_fold(ProtState, Fun, 0, fun(Acc) -> Acc + 1 end).
 

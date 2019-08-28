@@ -8,7 +8,7 @@
 -type inner_set() :: {rs(), ws()}.
 -type partitions_readwriteset() :: #{partition_id() => inner_set()}.
 -type rws() :: #{node_ip() => partitions_readwriteset()}.
--export_type([rws/0,partitions_readwriteset/0,inner_set/0]).
+-export_type([rws/0, partitions_readwriteset/0, inner_set/0]).
 
 %% API
 -export([new/0,

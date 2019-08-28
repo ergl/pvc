@@ -29,7 +29,9 @@ new(Ip, Port) ->
 
 -spec new(Ip :: node_ip(),
           Port :: inet:port_number(),
-          Opts :: pipesock_conn:conn_opts()) -> {ok, connection()} | {error, term()}.
+          Opts :: pipesock_conn:conn_opts()) -> {ok, connection()}
+                                              | {error, term()}.
+
 new(Ip, Port, Opts) ->
     pipesock_conn:open(Ip, Port, Opts).
 
@@ -84,7 +86,10 @@ send_async(Handle, MsgId, Msg, Callback) when ?VALID_SEND_ASYNC(Callback, Msg) -
     pipesock_conn:send_cb(Handle, wrap_msg(Handle, MsgId, Msg), WrapCallback).
 
 %% @doc Send a message and forget
--spec send_cast(Handle :: connection(), MsgId :: non_neg_integer(), Msg :: binary()) -> ok.
+-spec send_cast(Handle :: connection(),
+                MsgId :: non_neg_integer(),
+                Msg :: binary()) -> ok.
+
 send_cast(Handle, MsgId, Msg) ->
     pipesock_conn:send_and_forget(Handle, wrap_msg(Handle, MsgId, Msg)).
 

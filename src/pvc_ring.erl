@@ -36,7 +36,10 @@
 %%
 %%      Returns the layout of the ring where the given node lives
 %%
--spec partition_info(node_ip(), inet:port_number()) -> {ok, ring(), unique_nodes()} | socket_error().
+-spec partition_info(Address :: node_ip(),
+                     Port :: inet:port_number()) -> {ok, ring(), unique_nodes()}
+                                                  | socket_error().
+
 partition_info(Address, Port) ->
     case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
         {error, Reason} ->
@@ -47,7 +50,9 @@ partition_info(Address, Port) ->
             Reply
     end.
 
--spec partition_info_internal(gen_tcp:socket()) -> {ok, ring(), unique_nodes()} | socket_error().
+-spec partition_info_internal(gen_tcp:socket()) -> {ok, ring(), unique_nodes()}
+                                                 | socket_error().
+
 partition_info_internal(Socket) ->
     %% FIXME(borja): Hack to fit in message identifiers
     ok = gen_tcp:send(Socket, <<0:16, (ppb_protocol_driver:connect())/binary>>),
