@@ -522,6 +522,6 @@ node_fold(#psi_state{writeset=WS}, DoFun, Init, AccFun) ->
 
 node_fold(#ser_state{read_write_set=RWS}, DoFun, Init, AccFun) ->
     pvc_ser_transaction_readwriteset:fold(fun(Node, Partitions, Acc) ->
-        _ = DoFun(psi, Node, Partitions),
+        _ = DoFun(ser, Node, Partitions),
         AccFun(Acc)
     end, Init, RWS).
