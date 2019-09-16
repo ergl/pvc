@@ -404,6 +404,7 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
     ForEach = fun(Protocol, Node, Partitions) ->
         Connection = orddict:fetch(Node, Connections),
         Prepares = build_prepares(CommitVC, Partitions),
+        lager:info("[~p] -> ~p prepare := ~p", [TxId, Node, Prepares]),
         PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Protocol, Prepares),
         pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply)
     end,
@@ -437,6 +438,7 @@ collect_votes(N, VoteAcc) ->
     receive
         {node_vote, VoteReply} ->
             Reply = pvc_proto:decode_serv_reply(VoteReply),
+            lager:info("vote ~p", [Reply]),
             collect_votes(N - 1, update_vote_acc(Reply, VoteAcc))
         after 5000 ->
             collect_votes(N, VoteAcc)
@@ -462,10 +464,10 @@ send_decide(Connections, MsgId, #tx_state{id=TxId, protocol_state=ProtState}, Ou
     ForEach = fun(_, Node, Partitions) ->
         Connection = orddict:fetch(Node, Connections),
         %% No reply necessary
-        [pvc_connection:send_cast(Connection,
-                                  MsgId,
-                                  encode_decide(P, TxId, Outcome))
-            || P <- maps:keys(Partitions)]
+        [begin
+            lager:info( "[~p] -> ~p:~p decide := ~p", [TxId, Node, P, Outcome]),
+            pvc_connection:send_cast(Connection, MsgId, encode_decide(P, TxId, Outcome))
+         end || P <- maps:keys(Partitions)]
     end,
 
     for_each_node(ProtState, ForEach).
