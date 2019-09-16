@@ -127,6 +127,7 @@
 %%
 -spec start() -> ok | {error, Reason :: term()}.
 start() ->
+    ok = lager:start(),
     application:ensure_started(pipesock).
 
 -spec stop() -> ok | {error, Reason :: term()}.
