@@ -461,13 +461,13 @@ decide(#coord_state{connections=Connections, instance_id=Unique}, Tx, Outcome) -
                   transaction(), {ok, vc()} | abort()) -> ok.
 
 send_decide(Connections, MsgId, #tx_state{id=TxId, protocol_state=ProtState}, Outcome) ->
-    ForEach = fun(_, Node, Partitions) ->
+    ForEach = fun(_Protocol, Node, PartitionWSS) ->
         Connection = orddict:fetch(Node, Connections),
+        Partitions = maps:keys(PartitionWSS),
+        DecideMsg = encode_decide(Partitions, TxId, Outcome),
         %% No reply necessary
-        [begin
-            lager:info( "[~p] -> ~p:~p decide := ~p", [TxId, Node, P, Outcome]),
-            pvc_connection:send_cast(Connection, MsgId, encode_decide(P, TxId, Outcome))
-         end || P <- maps:keys(Partitions)]
+        lager:info( "[~p] -> ~p:~p decide := ~p", [TxId, Node, Partitions, Outcome]),
+        ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
     end,
 
     for_each_node(ProtState, ForEach).
@@ -488,11 +488,11 @@ update_vote_acc_internal(Vote, _) when element(1, Vote) =:= error ->
 update_vote_acc_internal({ok, Partition, Seq}, {ok, CommitVC}) ->
     {ok, pvc_vclock:set_time(Partition, Seq, CommitVC)}.
 
-encode_decide(Partition, TxId, {error, _, _}) ->
-    ppb_protocol_driver:decide_abort(Partition, TxId);
+encode_decide(Partitions, TxId, {error, _, _}) ->
+    ppb_protocol_driver:decide_node_abort(Partitions, TxId);
 
-encode_decide(Partition, TxId, {ok, CommitVC}) ->
-    ppb_protocol_driver:decide_commit(Partition, TxId, CommitVC).
+encode_decide(Partitions, TxId, {ok, CommitVC}) ->
+    ppb_protocol_driver:decide_node_commit(Partitions, TxId, CommitVC).
 
 %% FIXME(borja): Types
 %% abort() is defined as {abort, _}
