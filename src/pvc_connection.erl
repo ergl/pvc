@@ -91,11 +91,7 @@ send_async(Handle, MsgId, Msg, Callback) when ?VALID_SEND_ASYNC(Callback, Msg) -
                 Msg :: binary()) -> ok.
 
 send_cast(Handle, MsgId, Msg) ->
-    %% Drop the message on reply, but still log it
-    DropMsgCallback = fun(_Ref, _Reply) ->
-        lager:info("decide ack for id ~p", [MsgId])
-    end,
-    pipesock_conn:send_cb(Handle, wrap_msg(Handle, MsgId, Msg), DropMsgCallback).
+    pipesock_conn:send_and_forget(Handle, wrap_msg(Handle, MsgId, Msg)).
 
 -spec close(connection()) -> ok.
 close(Handle) ->
