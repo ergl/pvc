@@ -11,6 +11,7 @@
          send/4,
          send_async/4,
          send_cast/3,
+         send_bypass/3,
          close/1]).
 
 -type connection() :: pipesock_conn:conn_handle().
@@ -92,6 +93,13 @@ send_async(Handle, MsgId, Msg, Callback) when ?VALID_SEND_ASYNC(Callback, Msg) -
 
 send_cast(Handle, MsgId, Msg) ->
     pipesock_conn:send_and_forget(Handle, wrap_msg(Handle, MsgId, Msg)).
+
+-spec send_bypass(Handle :: connection(),
+                  MsgId :: non_neg_integer(),
+                  Msg :: binary()) -> ok.
+
+send_bypass(Handle, MsgId, Msg) ->
+    pipesock_conn:send_bypass(Handle, wrap_msg(Handle, MsgId, Msg)).
 
 -spec close(connection()) -> ok.
 close(Handle) ->

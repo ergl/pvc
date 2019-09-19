@@ -467,7 +467,7 @@ send_decide(Connections, MsgId, #tx_state{id=TxId, protocol_state=ProtState}, Ou
         DecideMsg = encode_decide(Partitions, TxId, Outcome),
         %% No reply necessary
         lager:info( "[~p] -> ~p:~p decide (id = ~p) := ~p", [TxId, Node, Partitions, MsgId, Outcome]),
-        ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
+        ok = pvc_connection:send_bypass(Connection, MsgId, DecideMsg)
     end,
 
     for_each_node(ProtState, ForEach).

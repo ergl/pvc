@@ -3,7 +3,7 @@
  {<<"lager">>,{pkg,<<"lager">>,<<"3.2.1">>},0},
  {<<"pipesock">>,
   {git,"https://github.com/ergl/pipesock.git",
-       {ref,"d4a1978cde538e14cd7844bdb0c2d5d9d2780e3e"}},
+       {ref,"bb0a99c19bb1c082b6bf6b4dddd4e7d78ac9b2f2"}},
   0},
  {<<"pvc_proto">>,
   {git,"https://github.com/ergl/pvc_proto.git",
