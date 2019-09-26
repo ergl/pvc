@@ -127,7 +127,6 @@
 %%
 -spec start() -> ok | {error, Reason :: term()}.
 start() ->
-    ok = lager:start(),
     application:ensure_started(pipesock).
 
 -spec stop() -> ok | {error, Reason :: term()}.
@@ -400,11 +399,10 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
                                             vc_dep=CommitVC,
                                             protocol_state=ProtState}) ->
     Self = self(),
-    OnReply = fun(_, Reply) -> Self ! {node_vote, TxId, MsgId, Reply} end,
+    OnReply = fun(_, Reply) -> Self ! {node_vote, Reply} end,
     ForEach = fun(Protocol, Node, Partitions) ->
         Connection = orddict:fetch(Node, Connections),
         Prepares = build_prepares(CommitVC, Partitions),
-        lager:info("[~p] -> ~p prepare (id = ~p) := ~p", [TxId, Node, MsgId, Prepares]),
         PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Protocol, Prepares),
         pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply)
     end,
@@ -436,9 +434,8 @@ collect_votes(0, VoteAcc) ->
     VoteAcc;
 collect_votes(N, VoteAcc) ->
     receive
-        {node_vote, TxId, MsgId, VoteReply} ->
+        {node_vote, VoteReply} ->
             Reply = pvc_proto:decode_serv_reply(VoteReply),
-            lager:info("[~p] received vote (id = ~p) ~p", [TxId, MsgId, Reply]),
             collect_votes(N - 1, update_vote_acc(Reply, VoteAcc))
         after 5000 ->
             collect_votes(N, VoteAcc)
@@ -466,8 +463,7 @@ send_decide(Connections, MsgId, #tx_state{id=TxId, protocol_state=ProtState}, Ou
         Partitions = maps:keys(PartitionWSS),
         DecideMsg = encode_decide(Partitions, TxId, Outcome),
         %% No reply necessary
-        lager:info( "[~p] -> ~p:~p decide (id = ~p) := ~p", [TxId, Node, Partitions, MsgId, Outcome]),
-        ok = pvc_connection:send_bypass(Connection, MsgId, DecideMsg)
+        ok = pvc_connection:send_cast(Connection, MsgId, DecideMsg)
     end,
 
     for_each_node(ProtState, ForEach).
