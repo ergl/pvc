@@ -267,13 +267,12 @@ read_internal(Key, State=#coord_state{connections=Conns,
             remote_read(Unique, IndexNode, Connection, Key, Tx)
     end.
 
--spec remote_read(
-    MsgId :: non_neg_integer(),
-    IndexNode :: index_node(),
-    Connection :: pvc_connection:connection(),
-    Key :: term(),
-    Tx :: transaction()
-) -> {ok, term(), transaction()} | abort().
+-spec remote_read(MsgId :: non_neg_integer(),
+                  IndexNode :: index_node(),
+                  Connection :: pvc_connection:connection(),
+                  Key :: term(),
+                  Tx :: transaction()) -> {ok, term(), transaction()} | abort().
+
 
 remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
     ReadRequest = ppb_protocol_driver:read_request(Partition,
@@ -286,7 +285,7 @@ remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
         {error, Aborted} ->
             {abort, Aborted};
         {ok, Value, VersionVC, MaxVC} ->
-            UpdatedTx = update_transacion(IndexNode,
+            UpdatedTx = update_transaction(IndexNode,
                                           Key,
                                           VersionVC,
                                           MaxVC,
@@ -295,7 +294,7 @@ remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
     end.
 
 %% @doc Update a transaction after a read.
--spec update_transacion(
+-spec update_transaction(
     IndexNode :: index_node(),
     Key :: term(),
     VersionVC :: vc(),
@@ -303,7 +302,7 @@ remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
     Tx :: transaction()
 ) -> transaction().
 
-update_transacion({Partition, _}=IndexNode, Key, VersionVC, MaxVC, Tx) ->
+update_transaction({Partition, _}=IndexNode, Key, VersionVC, MaxVC, Tx) ->
     #tx_state{vc_dep=VCdep,
               vc_aggr=VCaggr,
               read_partitions=HasRead,
