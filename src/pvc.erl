@@ -26,7 +26,7 @@
                                          pvc_connection:connection()).
 
 
--type protocol() :: psi | ser.
+-type protocol() :: psi | ser | rc.
 -define(DEFAULT_PROTOCOL, psi).
 
 -record(coord_state, {
@@ -87,6 +87,12 @@
     %% by node and partition. This way, we can send
     %% to partitions only the subset they need to verify
     read_write_set = pvc_ser_transaction_readwriteset:new() :: transaction_rws()
+}).
+
+%% Transaction-dependent state for Read Committed
+-record(rc_state, {
+    read_only = true :: boolean(),
+    writeset = pvc_transaction_writeset:new() :: transaction_ws()
 }).
 
 -type protocol_state() :: #psi_state{} | #ser_state{}.
@@ -205,8 +211,9 @@ update(State, Tx = #tx_state{read_local_cache=Cache, protocol_state=ProtState}, 
     {ok, Tx#tx_state{read_local_cache=NewCache, protocol_state=NewProtState}}.
 
 -spec commit(coord_state(), transaction()) -> ok | abort() | socket_error().
-%% Read-only transactions don't commit in the PSI protocol
+%% Read-only transactions don't commit in the PSI or RC protocols
 commit(_Conn, #tx_state{protocol_state=#psi_state{read_only=true}}) -> ok;
+commit(_Conn, #tx_state{protocol_state=#rc_state{read_only=true}}) -> ok;
 commit(State, Tx) -> commit_internal(State, Tx).
 
 -spec close(coord_state()) -> ok.
@@ -221,7 +228,8 @@ close(#coord_state{connections=Conns}) ->
 
 -spec protocol_state(protocol()) -> protocol_state().
 protocol_state(psi) -> #psi_state{};
-protocol_state(ser) -> #ser_state{}.
+protocol_state(ser) -> #ser_state{};
+protocol_state(rc) -> #rc_state{}.
 
 %%====================================================================
 %% Read Internal functions
@@ -273,6 +281,14 @@ read_internal(Key, State=#coord_state{connections=Conns,
                   Key :: term(),
                   Tx :: transaction()) -> {ok, term(), transaction()} | abort().
 
+%% Remote read for Read Committed
+remote_read(MsgId, {Partition, _}, Connection, Key, Tx=#tx_state{protocol_state=#rc_state{}}) ->
+    ReadRequest = ppb_protocol_driver:read_rc(Partition, Key),
+    {ok, RawReply} = pvc_connection:send(Connection, MsgId, ReadRequest),
+    {ok, Value} = pvc_proto:decode_serv_reply(RawReply),
+
+    %% A transaction doesn't change under RC after a read
+    {ok, Value, Tx};
 
 remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
     ReadRequest = ppb_protocol_driver:read_request(Partition,
@@ -367,6 +383,11 @@ update_internal(State, Key, Value, Cache, ProtState) ->
 write_protocol_state(IndexNode, Key, Value, ST=#psi_state{writeset=WS}) ->
     ST#psi_state{read_only = false,
                  writeset = pvc_transaction_writeset:put(IndexNode, Key, Value, WS)};
+
+%% Same as PSI
+write_protocol_state(IndexNode, Key, Value, ST=#rc_state{writeset=WS}) ->
+    ST#rc_state{read_only = false,
+                writeset = pvc_transaction_writeset:put(IndexNode, Key, Value, WS)};
 
 write_protocol_state(IndexNode, Key, Value, ST=#ser_state{read_write_set=RWS}) ->
     ST#ser_state{read_write_set = pvc_ser_transaction_readwriteset:put_ws(IndexNode,
@@ -519,6 +540,13 @@ for_each_node(ProtState, Fun) ->
                 AccFun :: fun((term()) -> term())) -> term().
 
 node_fold(#psi_state{writeset=WS}, DoFun, Init, AccFun) ->
+    pvc_transaction_writeset:fold(fun(Node, Partitions, Acc) ->
+        _ = DoFun(psi, Node, Partitions),
+        AccFun(Acc)
+    end, Init, WS);
+
+%% Same as PSI
+node_fold(#rc_state{writeset=WS}, DoFun, Init, AccFun) ->
     pvc_transaction_writeset:fold(fun(Node, Partitions, Acc) ->
         _ = DoFun(psi, Node, Partitions),
         AccFun(Acc)
