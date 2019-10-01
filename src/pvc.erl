@@ -548,7 +548,7 @@ node_fold(#psi_state{writeset=WS}, DoFun, Init, AccFun) ->
 %% Same as PSI
 node_fold(#rc_state{writeset=WS}, DoFun, Init, AccFun) ->
     pvc_transaction_writeset:fold(fun(Node, Partitions, Acc) ->
-        _ = DoFun(psi, Node, Partitions),
+        _ = DoFun(rc, Node, Partitions),
         AccFun(Acc)
     end, Init, WS);
 
