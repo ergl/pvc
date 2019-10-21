@@ -8,7 +8,7 @@
 
 %% API exports
 -export([new/3,
-         new/4,
+         new/5,
          start_transaction/2,
          read/3,
          update/3,
@@ -53,7 +53,8 @@
     %% Identifies the version of the protocol used by this
     %% coordinator. A coordinator can only spawn transactions
     %% of a single type.
-    protocol_version = ?DEFAULT_PROTOCOL :: protocol()
+    protocol_version = ?DEFAULT_PROTOCOL :: protocol(),
+    traces :: traces()
 }).
 
 %% An unique transaction id for this node ip,
@@ -111,6 +112,10 @@
     protocol_state :: protocol_state()
 }).
 
+-type trace_read() :: fun((transaction_id(), partition_id(), vc() | {abort, vc()}, [{transaction_id(), vc()}, ...], [{transaction_id(), term()}]) -> ok).
+-type trace_write() :: fun((transaction_id(), partition_id()) -> ok).
+-type traces() :: #{r => trace_read(), w => trace_write()}.
+
 -opaque coord_state() :: #coord_state{}.
 -opaque transaction() :: #tx_state{}.
 -type abort() :: {abort, atom()}.
@@ -148,7 +153,10 @@ stop() ->
           Identifier :: non_neg_integer()) -> {ok, coord_state()}.
 
 new(RingLayout, Connections, Identifier) ->
-    new(RingLayout, Connections, Identifier, ?DEFAULT_PROTOCOL).
+    new(RingLayout, Connections, Identifier, ?DEFAULT_PROTOCOL, #{r => mock_read(), w => mock_write()}).
+
+mock_read() -> fun(_, _, _, _, _, _) -> ok end.
+mock_write() -> fun(_, _) -> ok end.
 
 %% @doc Init the state of the coordinator
 %%
@@ -162,9 +170,10 @@ new(RingLayout, Connections, Identifier) ->
 -spec new(RingLayout :: pvc_ring:ring(),
           Connections :: cluster_conns(),
           Identifier :: non_neg_integer(),
-          Protocol :: protocol()) -> {ok, coord_state()}.
+          Protocol :: protocol(),
+          Traces :: traces()) -> {ok, coord_state()}.
 
-new(RingLayout, Connections, Identifier, Protocol) ->
+new(RingLayout, Connections, Identifier, Protocol, Traces) ->
     [{_, Connection}| _] = Connections,
     %% All connections should have the same ip
     SelfIp = pvc_connection:get_local_ip(Connection),
@@ -172,7 +181,8 @@ new(RingLayout, Connections, Identifier, Protocol) ->
                       instance_id=Identifier,
                       ring=RingLayout,
                       connections=Connections,
-                      protocol_version=Protocol}}.
+                      protocol_version=Protocol,
+                      traces=Traces}}.
 
 %% @doc Start a new Transaction. Id should be unique for this node.
 -spec start_transaction(coord_state(), term()) -> {ok, transaction()}.
@@ -195,8 +205,8 @@ read(State, Tx, Key) ->
 
 %% @doc Update the given Key. Old value is replaced with new one
 -spec update(coord_state(), transaction(), any(), any()) -> {ok, transaction()}.
-update(State, Tx = #tx_state{read_local_cache=Cache, protocol_state=ProtState}, Key, Value) ->
-    {NewCache, NewProtState} = update_internal(State, Key, Value, Cache, ProtState),
+update(State, Tx = #tx_state{id=TxId, read_local_cache=Cache, protocol_state=ProtState}, Key, Value) ->
+    {NewCache, NewProtState} = update_internal(State, TxId, Key, Value, Cache, ProtState),
     {ok, Tx#tx_state{read_local_cache=NewCache, protocol_state=NewProtState}}.
 
 %% @doc Update a batch of keys. Old values are replaced with the new ones.
@@ -204,9 +214,9 @@ update(State, Tx = #tx_state{read_local_cache=Cache, protocol_state=ProtState}, 
              Tx :: transaction(),
              Updates :: [{term(), term()}]) -> {ok, transaction()}.
 
-update(State, Tx = #tx_state{read_local_cache=Cache, protocol_state=ProtState}, Updates) when is_list(Updates) ->
+update(State, Tx = #tx_state{id=TxId, read_local_cache=Cache, protocol_state=ProtState}, Updates) when is_list(Updates) ->
     {NewCache, NewProtState} = lists:foldl(fun({Key, Value}, {AccCache, AccProtState}) ->
-        update_internal(State, Key, Value, AccCache, AccProtState)
+        update_internal(State, TxId, Key, Value, AccCache, AccProtState)
     end, {Cache, ProtState}, Updates),
     {ok, Tx#tx_state{read_local_cache=NewCache, protocol_state=NewProtState}}.
 
@@ -272,17 +282,18 @@ read_internal(Key, State=#coord_state{connections=Conns,
             {ok, Value, Tx};
         {false, {_, NodeIP}=IndexNode} ->
             Connection = orddict:fetch(NodeIP, Conns),
-            remote_read(Unique, IndexNode, Connection, Key, Tx)
+            remote_read(State, Unique, IndexNode, Connection, Key, Tx)
     end.
 
--spec remote_read(MsgId :: non_neg_integer(),
+-spec remote_read(_,
+                  MsgId :: non_neg_integer(),
                   IndexNode :: index_node(),
                   Connection :: pvc_connection:connection(),
                   Key :: term(),
                   Tx :: transaction()) -> {ok, term(), transaction()} | abort().
 
 %% Remote read for Read Committed
-remote_read(MsgId, {Partition, _}, Connection, Key, Tx=#tx_state{protocol_state=#rc_state{}}) ->
+remote_read(_State, MsgId, {Partition, _}, Connection, Key, Tx=#tx_state{protocol_state=#rc_state{}}) ->
     ReadRequest = ppb_protocol_driver:read_rc(Partition, Key),
     {ok, RawReply} = pvc_connection:send(Connection, MsgId, ReadRequest),
     {ok, Value} = pvc_proto:decode_serv_reply(RawReply),
@@ -290,7 +301,7 @@ remote_read(MsgId, {Partition, _}, Connection, Key, Tx=#tx_state{protocol_state=
     %% A transaction doesn't change under RC after a read
     {ok, Value, Tx};
 
-remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
+remote_read(#coord_state{traces=#{r:=TraceRead}}, MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
     ReadRequest = ppb_protocol_driver:read_request(Partition,
                                                    Key,
                                                    Tx#tx_state.vc_aggr,
@@ -298,9 +309,11 @@ remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
 
     {ok, RawReply} = pvc_connection:send(Connection, MsgId, ReadRequest),
     case pvc_proto:decode_serv_reply(RawReply) of
-        {error, Aborted} ->
-            {abort, Aborted};
-        {ok, Value, VersionVC, MaxVC} ->
+        {error, AbortReason, MaxVC, Log, Queue} ->
+            ok = TraceRead(Tx#tx_state.id, Partition, Tx#tx_state.vc_aggr, {abort, MaxVC}, Log, Queue),
+            {abort, AbortReason};
+        {ok, Value, VersionVC, MaxVC, Log, Queue} ->
+            ok = TraceRead(Tx#tx_state.id, Partition, Tx#tx_state.vc_aggr, MaxVC, Log, Queue),
             UpdatedTx = update_transaction(IndexNode,
                                           Key,
                                           VersionVC,
@@ -370,14 +383,16 @@ key_updated(State, Key, Cache) ->
     end.
 
 -spec update_internal(State :: coord_state(),
+                      _,
                       Key :: term(),
                       Value :: term(),
                       Cache :: value_cache(),
                       ProtocolState :: protocol_state()) -> {value_cache(), protocol_state()}.
 
-update_internal(State, Key, Value, Cache, ProtState) ->
+update_internal(State=#coord_state{traces=#{w:=TraceWrite}}, TxId, Key, Value, Cache, ProtState) ->
     NewCache = orddict:store(Key, Value, Cache),
-    IndexNode = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
+    {Partition, _}=IndexNode = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
+    ok = TraceWrite(TxId, Partition),
     {NewCache, write_protocol_state(IndexNode, Key, Value, ProtState)}.
 
 write_protocol_state(IndexNode, Key, Value, ST=#psi_state{writeset=WS}) ->
