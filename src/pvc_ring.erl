@@ -4,6 +4,8 @@
 
 %% API
 -export([partition_info/2,
+         grb_replica_info/2,
+         random_indexnode/1,
          get_key_indexnode/2]).
 
 %% TCP options for bootstrap info
@@ -65,6 +67,40 @@ partition_info_internal(Socket) ->
             FixedRing = make_fixed_ring(RingSize, RawRing),
             {ok, #ring{size=RingSize, fixed_ring=FixedRing}, UniqueNodes}
     end.
+
+%% @doc Given an address and port, get the replica info from that node
+%%
+%%      Returns the layout of the ring where the given node lives,
+%%      as well as the replica identifier from the cluster.
+%%
+-spec partition_info(Address :: node_ip(),
+                     Port :: inet:port_number()) -> {ok, term(), ring(), unique_nodes()}
+                                                  | socket_error().
+
+grb_replica_info(Address, Port) ->
+    case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, Sock} ->
+            %% FIXME(borja): Hack to fit in message identifiers
+            ok = gen_tcp:send(Sock, <<0:16, (ppb_grb_driver:connect())/binary>>),
+            Reply = case gen_tcp:recv(Sock, 0) of
+                {error, Reason} ->
+                    {error, Reason};
+                {ok, <<0:16, RawReply/binary>>} ->
+                    {ok, ReplicaID, RingSize, RawRing} = pvc_proto:decode_serv_reply(RawReply),
+                    UniqueNodes = unique_ring_nodes(RawRing),
+                    FixedRing = make_fixed_ring(RingSize, RawRing),
+                    {ok, ReplicaID, #ring{size=RingSize, fixed_ring=FixedRing}, UniqueNodes}
+            end,
+            ok = gen_tcp:close(Sock),
+            Reply
+    end.
+
+-spec random_indexnode(ring()) -> index_node().
+random_indexnode(#ring{size=Size, fixed_ring=Layout}) ->
+    Pos = rand:uniform(Size - 1),
+    erlang:element(Pos, Layout).
 
 -spec get_key_indexnode(ring(), term()) -> index_node().
 get_key_indexnode(#ring{size=Size, fixed_ring=Layout}, Key) ->

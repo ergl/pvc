@@ -9,11 +9,18 @@
 %% API exports
 -export([new/3,
          new/4,
+         grb_new/4,
          start_transaction/2,
+         grb_uniform_barrier/2,
+         grb_start_tx/2,
+         grb_start_tx/3,
+         grb_op/4,
+         grb_ronly_op/3,
          read/3,
          update/3,
          update/4,
          commit/2,
+         grb_blue_commit/2,
          close/1]).
 
 -ifdef(TEST).
@@ -26,7 +33,7 @@
                                          pvc_connection:connection()).
 
 
--type protocol() :: psi | ser | rc.
+-type protocol() :: psi | ser | rc | grb.
 -define(DEFAULT_PROTOCOL, psi).
 
 -record(coord_state, {
@@ -36,6 +43,8 @@
 
     %% Routing info
     ring :: pvc_ring:ring(),
+    %% Replica ID of the connected cluster
+    replica_id = ignore :: replica_id(),
 
     %% Opened connection, one per node in the cluster
     connections :: cluster_conns(),
@@ -69,6 +78,8 @@
 -type read_partitions() :: ordsets:ordset(partition_id()).
 
 -type vc() :: pvc_vclock:vc(partition_id()).
+
+-type rvc() :: pvc_vclock:vc(replica_id()).
 
 %% Transaction-dependent state for the PVC protocol
 -record(psi_state, {
@@ -111,14 +122,27 @@
     protocol_state :: protocol_state()
 }).
 
+-record(grb_tx_state, {
+    %% Identifier of the current transaction
+    %% Must be unique among all other active transactions
+    id :: transaction_id(),
+    %% Snapshot VC
+    vc = pvc_vclock:new() :: rvc(),
+    %% Read/write set for the transaction
+    read_only = true :: boolean(),
+    rws = pvc_grb_rws:new() :: pvc_grb_rws:t()
+}).
+
 -opaque coord_state() :: #coord_state{}.
 -opaque transaction() :: #tx_state{}.
+-opaque grb_transaction() :: #grb_tx_state{}.
 -type abort() :: {abort, atom()}.
 
 -export_type([coord_state/0,
               transaction_id/0,
               cluster_conns/0,
               transaction/0,
+              grb_transaction/0,
               abort/0,
               socket_error/0]).
 
@@ -174,10 +198,43 @@ new(RingLayout, Connections, Identifier, Protocol) ->
                       connections=Connections,
                       protocol_version=Protocol}}.
 
+-spec grb_new(RingLayout :: pvc_ring:ring(),
+              Connections :: cluster_conns(),
+              Identifier :: non_neg_integer(),
+              ReplicaID :: replica_id()) -> {ok, coord_state()}.
+
+grb_new(RingLayout, Connections, Identifier, ReplicaID) ->
+    [{_, Connection}| _] = Connections,
+    %% All connections should have the same ip
+    SelfIp = pvc_connection:get_local_ip(Connection),
+    {ok, #coord_state{self_ip=SelfIp,
+                      instance_id=Identifier,
+                      ring=RingLayout,
+                      replica_id=ReplicaID,
+                      connections=Connections,
+                      protocol_version=grb}}.
+
 %% @doc Start a new Transaction. Id should be unique for this node.
 -spec start_transaction(coord_state(), term()) -> {ok, transaction()}.
 start_transaction(#coord_state{self_ip=Ip, protocol_version=Prot}, Id) ->
     {ok, #tx_state{id={Ip, Id}, protocol_state=protocol_state(Prot)}}.
+
+%% @doc Enters an uniformity barrier at the local cluster with the given client clock
+-spec grb_uniform_barrier(coord_state(), rvc()) -> ok.
+grb_uniform_barrier(Coord, CVC) ->
+    remote_uniform_barrier(CVC, Coord).
+
+%% @doc Start a new GRB transaction. Id should be unique for this node.
+-spec grb_start_tx(coord_state(), term()) -> {ok, grb_transaction()}.
+grb_start_tx(Coord, Id) ->
+    grb_start_tx(Coord, Id, pvc_vclock:new()).
+
+%% @doc Start a new GRB transaction with the given client clock. Id should be unique for this node.
+-spec grb_start_tx(coord_state(), term(), rvc()) -> {ok, grb_transaction()}.
+grb_start_tx(Coord=#coord_state{self_ip=Ip,
+                                protocol_version=grb}, Id, CVC) ->
+    SnapshotVC = remote_start_tx(CVC, Coord),
+    {ok, #grb_tx_state{id={Ip, Id}, vc=SnapshotVC}}.
 
 %% @doc Read a key, or a list of keys.
 %%
@@ -222,6 +279,20 @@ close(#coord_state{connections=Conns}) ->
         pvc_connection:close(Connection)
     end, ok, Conns).
 
+-spec grb_ronly_op(coord_state(), grb_transaction(), term()) -> {ok, any(), grb_transaction()}.
+grb_ronly_op(State, Tx=#grb_tx_state{rws=RWS, vc=SVC}, Key) ->
+    {Val, NewRWS} = grb_ronly_op_internal(State, SVC, Key, RWS),
+    {ok, Val, Tx#grb_tx_state{rws=NewRWS}}.
+
+-spec grb_op(coord_state(), grb_transaction(), term(), term()) -> {ok, any(), grb_transaction()}.
+grb_op(State, Tx=#grb_tx_state{rws=RWS, vc=SVC}, Key, Val) ->
+    {NewVal, NewRWS} = grb_op_internal(State, SVC, Key, Val, RWS),
+    {ok, NewVal, Tx#grb_tx_state{rws=NewRWS, read_only=false}}.
+
+-spec grb_blue_commit(coord_state(), grb_transaction()) -> rvc().
+grb_blue_commit(_State, #grb_tx_state{read_only=true, vc=SVC}) -> SVC;
+grb_blue_commit(State, Tx) -> grb_blue_commit_internal(State, Tx).
+
 %%====================================================================
 %% Start Internal functions
 %%====================================================================
@@ -230,6 +301,23 @@ close(#coord_state{connections=Conns}) ->
 protocol_state(psi) -> #psi_state{};
 protocol_state(ser) -> #ser_state{};
 protocol_state(rc) -> #rc_state{}.
+
+-spec remote_uniform_barrier(rvc(), coord_state()) -> ok.
+remote_uniform_barrier(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ring}) ->
+    {_, NodeIp} = pvc_ring:random_indexnode(Ring),
+    Connection = orddict:fetch(NodeIp, Conns),
+    Req = ppb_grb_driver:uniform_barrier(CVC),
+    {ok, RawReply} = pvc_connection:send(Connection, Unique, Req),
+    ok = pvc_proto:decode_serv_reply(RawReply).
+
+-spec remote_start_tx(rvc(), coord_state()) -> rvc().
+remote_start_tx(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ring}) ->
+    {_, NodeIp} = pvc_ring:random_indexnode(Ring),
+    Connection = orddict:fetch(NodeIp, Conns),
+    Req = ppb_grb_driver:start_tx(CVC),
+    {ok, RawReply} = pvc_connection:send(Connection, Unique, Req),
+    {ok, SVC} = pvc_proto:decode_serv_reply(RawReply),
+    SVC.
 
 %%====================================================================
 %% Read Internal functions
@@ -344,6 +432,27 @@ read_protocol_state({Partition, _}=IndexNode, Key, VersionVC, ST=#ser_state{read
 
 read_protocol_state(_, _, _, State) ->
     State.
+
+-spec grb_ronly_op_internal(coord_state(), rvc(), term(), pvc_grb_rws:t()) -> {any(), pvc_grb_rws:t()}.
+grb_ronly_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, RWS) ->
+    {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key),
+    Conn = orddict:fetch(IP, Conns),
+    Req = ppb_grb_driver:op_request(Partition, SVC, Key, <<>>),
+    {ok, RawReply} = pvc_connection:send(Conn, Unique, Req),
+    {ok, NewVal, RedTS} = pvc_proto:decode_serv_reply(RawReply),
+    {NewVal, pvc_grb_rws:put_ronly_op({Partition, IP}, Key, RedTS, RWS)}.
+
+%% @doc Perform a GRB readwrite
+%%
+%% todo(borja): Support paraller reads, aggr per node?
+-spec grb_op_internal(coord_state(), rvc(), term(), term(), pvc_grb_rws:t()) -> {val(), pvc_grb_rws:t()}.
+grb_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, Val, RWS) ->
+    {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key),
+    Conn = orddict:fetch(IP, Conns),
+    Req = ppb_grb_driver:op_request(Partition, SVC, Key, Val),
+    {ok, RawReply} = pvc_connection:send(Conn, Unique, Req),
+    {ok, NewVal, RedTS} = pvc_proto:decode_serv_reply(RawReply),
+    {NewVal, pvc_grb_rws:put_op({Partition, IP}, Key, NewVal, RedTS, RWS)}.
 
 %%====================================================================
 %% Update Internal functions
@@ -519,6 +628,60 @@ result({error, _, Reason}) ->
 
 result({ok, _}) ->
     ok.
+
+%%====================================================================
+%% Blue Commit Internal functions
+%%====================================================================
+
+-spec grb_blue_commit_internal(coord_state(), grb_transaction()) -> rvc().
+grb_blue_commit_internal(State, Tx) ->
+    decide_blue(State, Tx, prepare_blue(State, Tx)).
+
+-spec prepare_blue(coord_state(), grb_transaction()) -> rvc().
+prepare_blue(#coord_state{connections=Connections, instance_id=Unique, replica_id=ReplicaID}, Tx) ->
+    ToAck = send_blue_prepares(Connections, Unique, Tx),
+    collect_blue_votes(ToAck, ReplicaID, Tx#grb_tx_state.vc).
+
+-spec send_blue_prepares(cluster_conns(), non_neg_integer(), grb_transaction()) -> non_neg_integer().
+send_blue_prepares(Connections, MsgId, #grb_tx_state{id=TxId, vc=SVC, rws=RWS}) ->
+    Self = self(),
+    OnReply = fun(_, Reply) -> Self ! {node_blue_vote, Reply} end,
+    pvc_grb_rws:fold(fun(Node, Partitions, Acc) ->
+        Connection = orddict:fetch(Node, Connections),
+        Prepares = maps:fold(fun(Partition, {_, WS}, Acc) ->
+            [{Partition, WS} | Acc]
+        end, [], Partitions),
+        Msg = ppb_grb_driver:prepare_blue_node(TxId, SVC, Prepares),
+        pvc_connection:send_async(Connection, MsgId, Msg, OnReply),
+        Acc + 1
+    end, 0, RWS).
+
+-spec collect_blue_votes(non_neg_integer(), replica_id(), rvc()) -> rvc().
+collect_blue_votes(0, _ReplicaID, CVC) -> CVC;
+collect_blue_votes(N, ReplicaID, CVC) ->
+    receive
+        {node_blue_vote, VoteReply} ->
+            Reply = pvc_proto:decode_serv_reply(VoteReply),
+            collect_blue_votes(N - 1, ReplicaID, update_blue_vote_acc(Reply, CVC, ReplicaID))
+    end.
+
+-spec update_blue_vote_acc([{ok, partition_id(), non_neg_integer()}, ...], replica_id(), rvc()) -> rvc().
+update_blue_vote_acc(Votes, ReplicaID, CVC) ->
+    lists:foldl(fun({ok, _, PT}, Acc) ->
+        pvc_vclock:set_time(ReplicaID,
+                            erlang:max(PT, pvc_vclock:get_time(ReplicaID, Acc)),
+                            Acc)
+    end, CVC, Votes).
+
+-spec decide_blue(coord_state(), grb_transaction(), rvc()) -> rvc().
+decide_blue(#coord_state{connections=Connections, instance_id=Unique}, #grb_tx_state{id=TxId, rws=RWS}, CVC) ->
+    ok = pvc_grb_rws:fold(fun(Node, Partitions, ok) ->
+        Connection = orddict:fetch(Node, Connections),
+        Partitions = maps:keys(Partitions),
+        Msg = ppb_grb_driver:decide_blue_node(TxId, Partitions, CVC),
+        ok = pvc_connection:send_cast(Connection, Unique, Msg)
+    end, ok, RWS),
+    CVC.
 
 %%====================================================================
 %% Generic Util functions
