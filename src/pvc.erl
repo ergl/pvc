@@ -445,7 +445,7 @@ grb_ronly_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Uni
 %% @doc Perform a GRB readwrite
 %%
 %% todo(borja): Support paraller reads, aggr per node?
--spec grb_op_internal(coord_state(), rvc(), term(), term(), pvc_grb_rws:t()) -> {val(), pvc_grb_rws:t()}.
+-spec grb_op_internal(coord_state(), rvc(), term(), term(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 grb_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, Val, RWS) ->
     {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key),
     Conn = orddict:fetch(IP, Conns),
@@ -646,14 +646,14 @@ prepare_blue(#coord_state{connections=Connections, instance_id=Unique, replica_i
 send_blue_prepares(Connections, MsgId, #grb_tx_state{id=TxId, vc=SVC, rws=RWS}) ->
     Self = self(),
     OnReply = fun(_, Reply) -> Self ! {node_blue_vote, Reply} end,
-    pvc_grb_rws:fold(fun(Node, Partitions, Acc) ->
+    pvc_grb_rws:fold(fun(Node, Partitions, Count) ->
         Connection = orddict:fetch(Node, Connections),
         Prepares = maps:fold(fun(Partition, {_, WS}, Acc) ->
             [{Partition, WS} | Acc]
         end, [], Partitions),
         Msg = ppb_grb_driver:prepare_blue_node(TxId, SVC, Prepares),
         pvc_connection:send_async(Connection, MsgId, Msg, OnReply),
-        Acc + 1
+        Count + 1
     end, 0, RWS).
 
 -spec collect_blue_votes(non_neg_integer(), replica_id(), rvc()) -> rvc().
@@ -662,7 +662,7 @@ collect_blue_votes(N, ReplicaID, CVC) ->
     receive
         {node_blue_vote, VoteReply} ->
             Reply = pvc_proto:decode_serv_reply(VoteReply),
-            collect_blue_votes(N - 1, ReplicaID, update_blue_vote_acc(Reply, CVC, ReplicaID))
+            collect_blue_votes(N - 1, ReplicaID, update_blue_vote_acc(Reply, ReplicaID, CVC))
     end.
 
 -spec update_blue_vote_acc([{ok, partition_id(), non_neg_integer()}, ...], replica_id(), rvc()) -> rvc().
@@ -677,8 +677,8 @@ update_blue_vote_acc(Votes, ReplicaID, CVC) ->
 decide_blue(#coord_state{connections=Connections, instance_id=Unique}, #grb_tx_state{id=TxId, rws=RWS}, CVC) ->
     ok = pvc_grb_rws:fold(fun(Node, Partitions, ok) ->
         Connection = orddict:fetch(Node, Connections),
-        Partitions = maps:keys(Partitions),
-        Msg = ppb_grb_driver:decide_blue_node(TxId, Partitions, CVC),
+        DecidePartitions = maps:keys(Partitions),
+        Msg = ppb_grb_driver:decide_blue_node(TxId, DecidePartitions, CVC),
         ok = pvc_connection:send_cast(Connection, Unique, Msg)
     end, ok, RWS),
     CVC.

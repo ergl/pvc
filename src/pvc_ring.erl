@@ -73,9 +73,9 @@ partition_info_internal(Socket) ->
 %%      Returns the layout of the ring where the given node lives,
 %%      as well as the replica identifier from the cluster.
 %%
--spec partition_info(Address :: node_ip(),
-                     Port :: inet:port_number()) -> {ok, term(), ring(), unique_nodes()}
-                                                  | socket_error().
+-spec grb_replica_info(Address :: node_ip(),
+                       Port :: inet:port_number()) -> {ok, term(), ring(), unique_nodes()}
+                                                    | socket_error().
 
 grb_replica_info(Address, Port) ->
     case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
