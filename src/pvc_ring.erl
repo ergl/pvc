@@ -6,7 +6,8 @@
 -export([partition_info/2,
          grb_replica_info/2,
          random_indexnode/1,
-         get_key_indexnode/2]).
+         get_key_indexnode/2,
+         get_key_indexnode/3]).
 
 %% TCP options for bootstrap info
 -define(CONN_OPTIONS, [binary,
@@ -103,30 +104,34 @@ random_indexnode(#ring{size=Size, fixed_ring=Layout}) ->
     erlang:element(Pos, Layout).
 
 -spec get_key_indexnode(ring(), term()) -> index_node().
-get_key_indexnode(#ring{size=Size, fixed_ring=Layout}, Key) ->
-    Pos = convert_key(Key) rem Size + 1,
+get_key_indexnode(Ring, Key) ->
+    get_key_indexnode(Ring, Key, ?ANTIDOTE_BUCKET).
+
+-spec get_key_indexnode(ring(), term(), term()) -> index_node().
+get_key_indexnode(#ring{size=Size, fixed_ring=Layout}, Key, Bucket) ->
+    Pos = convert_key(Key, Bucket) rem Size + 1,
     erlang:element(Pos, Layout).
 
 %%====================================================================
 %% Routing Internal functions
 %%====================================================================
 
--spec convert_key(term()) -> non_neg_integer().
-convert_key(Key) when is_binary(Key) ->
+-spec convert_key(term(), term()) -> non_neg_integer().
+convert_key(Key, Bucket) when is_binary(Key) ->
     try
         abs(binary_to_integer(Key))
     catch _:_ ->
         %% Looked into the internals of riak_core for this
-        HashedKey = crypto:hash(sha, term_to_binary({<<"antidote">>, Key})),
+        HashedKey = crypto:hash(sha, term_to_binary({Bucket, Key})),
         abs(crypto:bytes_to_integer(HashedKey))
     end;
 
-convert_key(Key) when is_integer(Key) ->
+convert_key(Key, _) when is_integer(Key) ->
     abs(Key);
 
-convert_key(TermKey) ->
-    %% Add bucket information
-    BinaryTerm = term_to_binary({<<"antidote">>, term_to_binary(TermKey)}),
+convert_key(TermKey, Bucket) ->
+    %% Looked into the internals of riak_core for this
+    BinaryTerm = term_to_binary({Bucket, term_to_binary(TermKey)}),
     HashedKey = crypto:hash(sha, BinaryTerm),
     abs(crypto:bytes_to_integer(HashedKey)).
 

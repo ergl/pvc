@@ -435,7 +435,7 @@ read_protocol_state(_, _, _, State) ->
 
 -spec grb_ronly_op_internal(coord_state(), rvc(), term(), pvc_grb_rws:t()) -> {any(), pvc_grb_rws:t()}.
 grb_ronly_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, RWS) ->
-    {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key),
+    {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Conn = orddict:fetch(IP, Conns),
     Req = ppb_grb_driver:op_request(Partition, SVC, Key, <<>>),
     {ok, RawReply} = pvc_connection:send(Conn, Unique, Req),
@@ -447,7 +447,7 @@ grb_ronly_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Uni
 %% todo(borja): Support paraller reads, aggr per node?
 -spec grb_op_internal(coord_state(), rvc(), term(), term(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 grb_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, Val, RWS) ->
-    {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key),
+    {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Conn = orddict:fetch(IP, Conns),
     Req = ppb_grb_driver:op_request(Partition, SVC, Key, Val),
     {ok, RawReply} = pvc_connection:send(Conn, Unique, Req),
