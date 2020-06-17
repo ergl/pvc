@@ -2,7 +2,7 @@ PACKAGE ?= pvc
 VERSION ?= $(shell git describe --tags)
 BASE_DIR ?= $(shell pwd)
 ERLANG_BIN ?= $(shell dirname $(shell which erl))
-REBAR ?= rebar3
+REBAR ?= $(BASE_DIR)/rebar3
 MAKE = make
 
 .PHONY: compile clean packageclean check lint shell
@@ -28,4 +28,3 @@ shell:
 	$(REBAR) shell --apps pvc
 
 include tools.mk
-
