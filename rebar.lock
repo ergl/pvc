@@ -4,7 +4,7 @@
   0},
  {<<"pvc_proto">>,
   {git,"https://github.com/ergl/pvc_proto.git",
-       {ref,"eff6f2fb1c423be5ebf36db5fb24be90ba1d818f"}},
+       {ref,"08ef18af4dcd896b6557be6daf65eb89d8fa44d7"}},
   0},
  {<<"pvc_types">>,
   {git,"https://github.com/ergl/pvc_types.git",

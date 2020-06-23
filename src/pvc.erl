@@ -304,17 +304,17 @@ protocol_state(rc) -> #rc_state{}.
 
 -spec remote_uniform_barrier(rvc(), coord_state()) -> ok.
 remote_uniform_barrier(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ring}) ->
-    {_, NodeIp} = pvc_ring:random_indexnode(Ring),
+    {Partition, NodeIp} = pvc_ring:random_indexnode(Ring),
     Connection = orddict:fetch(NodeIp, Conns),
-    Req = ppb_grb_driver:uniform_barrier(CVC),
+    Req = ppb_grb_driver:uniform_barrier(Partition, CVC),
     {ok, RawReply} = pvc_connection:send(Connection, Unique, Req),
     ok = pvc_proto:decode_serv_reply(RawReply).
 
 -spec remote_start_tx(rvc(), coord_state()) -> rvc().
 remote_start_tx(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ring}) ->
-    {_, NodeIp} = pvc_ring:random_indexnode(Ring),
+    {Partition, NodeIp} = pvc_ring:random_indexnode(Ring),
     Connection = orddict:fetch(NodeIp, Conns),
-    Req = ppb_grb_driver:start_tx(CVC),
+    Req = ppb_grb_driver:start_tx(Partition, CVC),
     {ok, RawReply} = pvc_connection:send(Connection, Unique, Req),
     {ok, SVC} = pvc_proto:decode_serv_reply(RawReply),
     SVC.
@@ -323,7 +323,7 @@ remote_start_tx(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ri
 %% Read Internal functions
 %%====================================================================
 
-%% @doc Accumulatevly read the given keys.
+%% @doc Accumulatively read the given keys.
 %%
 %%      On any error, return inmediately and stop reading further keys.
 %%      Will not return any read value in that case.
