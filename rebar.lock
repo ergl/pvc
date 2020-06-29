@@ -1,6 +1,6 @@
 [{<<"pipesock">>,
   {git,"https://github.com/ergl/pipesock.git",
-       {ref,"45b042e0ab8dd0e24d36cadd6fa41bf6c4d7ebd7"}},
+       {ref,"0bde8134bf0152dca714b4de1f248c9dc73a1d34"}},
   0},
  {<<"pvc_proto">>,
   {git,"https://github.com/ergl/pvc_proto.git",
