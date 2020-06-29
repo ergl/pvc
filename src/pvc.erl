@@ -9,7 +9,7 @@
 %% API exports
 -export([new/3,
          new/4,
-         grb_new/4,
+         grb_new/1,
          start_transaction/2,
          grb_uniform_barrier/2,
          grb_start_tx/2,
@@ -30,7 +30,7 @@
 
 
 -type cluster_conns() :: orddict:orddict(node_ip(),
-                                         pvc_connection:connection()).
+                                         pvc_connection:connection() | pvc_direct_connection:connection()).
 
 
 -type protocol() :: psi | ser | rc | grb.
@@ -45,6 +45,8 @@
     ring :: pvc_ring:ring(),
     %% Replica ID of the connected cluster
     replica_id = ignore :: replica_id(),
+    %% Which connection transport to use for GRB
+    transport = ignore :: module() | ignore,
 
     %% Opened connection, one per node in the cluster
     connections :: cluster_conns(),
@@ -106,7 +108,7 @@
     writeset = pvc_transaction_writeset:new() :: transaction_ws()
 }).
 
--type protocol_state() :: #psi_state{} | #ser_state{}.
+-type protocol_state() :: #psi_state{} | #ser_state{} | #rc_state{}.
 -record(tx_state, {
     %% Identifier of the current transaction
     %% Must be unique among all other active transactions
@@ -198,20 +200,23 @@ new(RingLayout, Connections, Identifier, Protocol) ->
                       connections=Connections,
                       protocol_version=Protocol}}.
 
--spec grb_new(RingLayout :: pvc_ring:ring(),
-              Connections :: cluster_conns(),
-              Identifier :: non_neg_integer(),
-              ReplicaID :: replica_id()) -> {ok, coord_state()}.
-
-grb_new(RingLayout, Connections, Identifier, ReplicaID) ->
+-spec grb_new(Args :: #{
+    ring := pvc_ring:ring(),
+    connections := cluster_conns(),
+    coord_id := non_neg_integer(),
+    replica_id := replica_id()
+}) -> {ok, coord_state()}.
+grb_new(Args=#{ring := Ring, connections := Connections, coord_id := Identifier, replica_id := ReplicaId}) ->
+    Transport = maps:get(transport, Args, pvc_connection),
     [{_, Connection}| _] = Connections,
     %% All connections should have the same ip
-    SelfIp = pvc_connection:get_local_ip(Connection),
+    SelfIp = Transport:get_local_ip(Connection),
     {ok, #coord_state{self_ip=SelfIp,
                       instance_id=Identifier,
-                      ring=RingLayout,
-                      replica_id=ReplicaID,
+                      ring=Ring,
+                      replica_id=ReplicaId,
                       connections=Connections,
+                      transport=Transport,
                       protocol_version=grb}}.
 
 %% @doc Start a new Transaction. Id should be unique for this node.
@@ -274,9 +279,14 @@ commit(_Conn, #tx_state{protocol_state=#rc_state{read_only=true}}) -> ok;
 commit(State, Tx) -> commit_internal(State, Tx).
 
 -spec close(coord_state()) -> ok.
-close(#coord_state{connections=Conns}) ->
+close(#coord_state{connections=Conns, transport=undefined}) ->
     orddict:fold(fun(_Node, Connection, ok) ->
         pvc_connection:close(Connection)
+    end, ok, Conns);
+
+close(#coord_state{connections=Conns, transport=Transport}) ->
+    orddict:fold(fun(_Node, Connection, ok) ->
+        Transport:close(Connection)
     end, ok, Conns).
 
 -spec grb_ronly_op(coord_state(), grb_transaction(), term()) -> {ok, any(), grb_transaction()}.
@@ -303,19 +313,19 @@ protocol_state(ser) -> #ser_state{};
 protocol_state(rc) -> #rc_state{}.
 
 -spec remote_uniform_barrier(rvc(), coord_state()) -> ok.
-remote_uniform_barrier(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ring}) ->
+remote_uniform_barrier(CVC, #coord_state{transport=Transport, connections=Conns, instance_id=Unique, ring=Ring}) ->
     {Partition, NodeIp} = pvc_ring:random_indexnode(Ring),
     Connection = orddict:fetch(NodeIp, Conns),
     Req = ppb_grb_driver:uniform_barrier(Partition, CVC),
-    {ok, RawReply} = pvc_connection:send(Connection, Unique, Req),
+    {ok, RawReply} = Transport:send(Connection, Unique, Req),
     ok = pvc_proto:decode_serv_reply(RawReply).
 
 -spec remote_start_tx(rvc(), coord_state()) -> rvc().
-remote_start_tx(CVC, #coord_state{connections=Conns, instance_id=Unique, ring=Ring}) ->
+remote_start_tx(CVC, #coord_state{transport=Transport, connections=Conns, instance_id=Unique, ring=Ring}) ->
     {Partition, NodeIp} = pvc_ring:random_indexnode(Ring),
     Connection = orddict:fetch(NodeIp, Conns),
     Req = ppb_grb_driver:start_tx(Partition, CVC),
-    {ok, RawReply} = pvc_connection:send(Connection, Unique, Req),
+    {ok, RawReply} = Transport:send(Connection, Unique, Req),
     {ok, SVC} = pvc_proto:decode_serv_reply(RawReply),
     SVC.
 
@@ -434,11 +444,11 @@ read_protocol_state(_, _, _, State) ->
     State.
 
 -spec grb_ronly_op_internal(coord_state(), rvc(), term(), pvc_grb_rws:t()) -> {any(), pvc_grb_rws:t()}.
-grb_ronly_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, RWS) ->
+grb_ronly_op_internal(#coord_state{transport=Transport, ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, RWS) ->
     {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Conn = orddict:fetch(IP, Conns),
     Req = ppb_grb_driver:op_request(Partition, SVC, Key, <<>>),
-    {ok, RawReply} = pvc_connection:send(Conn, Unique, Req),
+    {ok, RawReply} = Transport:send(Conn, Unique, Req),
     {ok, NewVal, RedTS} = pvc_proto:decode_serv_reply(RawReply),
     {NewVal, pvc_grb_rws:put_ronly_op({Partition, IP}, Key, RedTS, RWS)}.
 
@@ -446,11 +456,11 @@ grb_ronly_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Uni
 %%
 %% todo(borja): Support paraller reads, aggr per node?
 -spec grb_op_internal(coord_state(), rvc(), term(), term(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
-grb_op_internal(#coord_state{ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, Val, RWS) ->
+grb_op_internal(#coord_state{transport=Transport, ring=Ring, connections=Conns, instance_id=Unique}, SVC, Key, Val, RWS) ->
     {Partition, IP} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Conn = orddict:fetch(IP, Conns),
     Req = ppb_grb_driver:op_request(Partition, SVC, Key, Val),
-    {ok, RawReply} = pvc_connection:send(Conn, Unique, Req),
+    {ok, RawReply} = Transport:send(Conn, Unique, Req),
     {ok, NewVal, RedTS} = pvc_proto:decode_serv_reply(RawReply),
     {NewVal, pvc_grb_rws:put_op({Partition, IP}, Key, NewVal, RedTS, RWS)}.
 
@@ -638,12 +648,12 @@ grb_blue_commit_internal(State, Tx) ->
     decide_blue(State, Tx, prepare_blue(State, Tx)).
 
 -spec prepare_blue(coord_state(), grb_transaction()) -> rvc().
-prepare_blue(#coord_state{connections=Connections, instance_id=Unique, replica_id=ReplicaID}, Tx) ->
-    ToAck = send_blue_prepares(Connections, Unique, Tx),
+prepare_blue(#coord_state{transport=Transport, connections=Connections, instance_id=Unique, replica_id=ReplicaID}, Tx) ->
+    ToAck = send_blue_prepares(Transport, Connections, Unique, Tx),
     collect_blue_votes(ToAck, ReplicaID, Tx#grb_tx_state.vc).
 
--spec send_blue_prepares(cluster_conns(), non_neg_integer(), grb_transaction()) -> non_neg_integer().
-send_blue_prepares(Connections, MsgId, #grb_tx_state{id=TxId, vc=SVC, rws=RWS}) ->
+-spec send_blue_prepares(module(), cluster_conns(), non_neg_integer(), grb_transaction()) -> non_neg_integer().
+send_blue_prepares(Transport, Connections, MsgId, #grb_tx_state{id=TxId, vc=SVC, rws=RWS}) ->
     Self = self(),
     OnReply = fun(_, Reply) -> Self ! {node_blue_vote, Reply} end,
     pvc_grb_rws:fold(fun(Node, Partitions, Count) ->
@@ -652,7 +662,7 @@ send_blue_prepares(Connections, MsgId, #grb_tx_state{id=TxId, vc=SVC, rws=RWS}) 
             [{Partition, WS} | Acc]
         end, [], Partitions),
         Msg = ppb_grb_driver:prepare_blue_node(TxId, SVC, Prepares),
-        pvc_connection:send_async(Connection, MsgId, Msg, OnReply),
+        Transport:send_async(Connection, MsgId, Msg, OnReply),
         Count + 1
     end, 0, RWS).
 
@@ -674,12 +684,12 @@ update_blue_vote_acc(Votes, ReplicaID, CVC) ->
     end, CVC, Votes).
 
 -spec decide_blue(coord_state(), grb_transaction(), rvc()) -> rvc().
-decide_blue(#coord_state{connections=Connections, instance_id=Unique}, #grb_tx_state{id=TxId, rws=RWS}, CVC) ->
+decide_blue(#coord_state{transport=Transport, connections=Connections, instance_id=Unique}, #grb_tx_state{id=TxId, rws=RWS}, CVC) ->
     ok = pvc_grb_rws:fold(fun(Node, Partitions, ok) ->
         Connection = orddict:fetch(Node, Connections),
         DecidePartitions = maps:keys(Partitions),
         Msg = ppb_grb_driver:decide_blue_node(TxId, DecidePartitions, CVC),
-        ok = pvc_connection:send_cast(Connection, Unique, Msg)
+        ok = Transport:send_cast(Connection, Unique, Msg)
     end, ok, RWS),
     CVC.
 

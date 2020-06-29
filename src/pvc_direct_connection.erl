@@ -1,4 +1,4 @@
--module(pvc_connection).
+-module(pvc_direct_connection).
 
 -include("pvc.hrl").
 
@@ -25,7 +25,7 @@
           Port :: inet:port_number()) -> {ok, connection()} | {error, term()}.
 
 new(Ip, Port) ->
-    pipesock_conn:open(Ip, Port, #{id_len => 16}).
+    pipesock_conn:open(Ip, Port, #{id_len => 16, cork_len => disable}).
 
 -spec new(Ip :: node_ip(),
           Port :: inet:port_number(),
@@ -33,7 +33,7 @@ new(Ip, Port) ->
                                               | {error, term()}.
 
 new(Ip, Port, Opts) ->
-    pipesock_conn:open(Ip, Port, Opts).
+    pipesock_conn:open(Ip, Port, Opts#{cork_len => disable}).
 
 %% @doc Get the unique reference of the connection.
 %%
@@ -65,7 +65,7 @@ send(Handle, MsgId, Msg) ->
            Timeout :: conn_timeout()) -> {ok, term()} | {error, timeout}.
 
 send(Handle, MsgId, Msg, Timeout) when ?VALID_SEND_SYNC(Timeout, Msg) ->
-    case pipesock_conn:send_sync(Handle, wrap_msg(Handle, MsgId, Msg), Timeout) of
+    case pipesock_conn:send_direct_sync(Handle, wrap_msg(Handle, MsgId, Msg), Timeout) of
         {error, timeout} ->
             {error, timeout};
         {ok, Reply} ->
@@ -83,7 +83,7 @@ send_async(Handle, MsgId, Msg, Callback) when ?VALID_SEND_ASYNC(Callback, Msg) -
     WrapCallback = fun(ConnRef, Reply) ->
         Callback(ConnRef, unwrap_msg(Handle, Reply))
     end,
-    pipesock_conn:send_cb(Handle, wrap_msg(Handle, MsgId, Msg), WrapCallback).
+    pipesock_conn:send_direct_cb(Handle, wrap_msg(Handle, MsgId, Msg), WrapCallback).
 
 %% @doc Send a message and forget
 -spec send_cast(Handle :: connection(),
@@ -91,7 +91,7 @@ send_async(Handle, MsgId, Msg, Callback) when ?VALID_SEND_ASYNC(Callback, Msg) -
                 Msg :: binary()) -> ok.
 
 send_cast(Handle, MsgId, Msg) ->
-    pipesock_conn:send_and_forget(Handle, wrap_msg(Handle, MsgId, Msg)).
+    pipesock_conn:send_direct_and_forget(Handle, wrap_msg(Handle, MsgId, Msg)).
 
 -spec close(connection()) -> ok.
 close(Handle) ->
