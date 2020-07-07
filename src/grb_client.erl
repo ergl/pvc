@@ -88,8 +88,8 @@ start_transaction(Coord, Id) ->
     start_transaction(Coord, Id, pvc_vclock:new()).
 
 -spec start_transaction(coord(), non_neg_integer(), rvc()) -> {ok, tx()}.
-start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, SVC) ->
-    {ok, SVC} = start_internal(SVC, Coord),
+start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CVC) ->
+    {ok, SVC} = start_internal(CVC, Coord),
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC}}.
 
 %% todo(borja): parallel read
