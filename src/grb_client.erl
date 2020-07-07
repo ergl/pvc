@@ -4,6 +4,8 @@
 
 %% API
 -export([new/5,
+         close/1,
+         uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
          read_op/3,
@@ -63,6 +65,23 @@ new(ReplicaId, CoordId, RingInfo, Nodes, Port) ->
                       replica_id=ReplicaId,
                       sockets=Sockets,
                       coordinator_id=CoordId}}.
+
+-spec close(coord()) -> ok.
+close(#coordinator{sockets=Sockets}) ->
+    [ gen_tcp:close(S) || {_, S} <- maps:to_list(Sockets) ],
+    ok.
+
+-spec uniform_barrier(coord(), rvc()) -> ok.
+uniform_barrier(#coordinator{coordinator_id=Id, ring=Ring, sockets=Socks}, CVC) ->
+    {Partition, Node} = pvc_ring:random_indexnode(Ring),
+    S = maps:get(Node, Socks),
+    ok = gen_tcp:send(S, <<Id:16, (ppb_grb_driver:uniform_barrier(Partition, CVC))/binary>>),
+    case gen_tcp:recv(S, 0) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, <<Id:16, RawReply/binary>>} ->
+            pvc_proto:decode_serv_reply(RawReply)
+    end.
 
 -spec start_transaction(coord(), non_neg_integer()) -> {ok, tx()}.
 start_transaction(Coord, Id) ->
