@@ -159,8 +159,9 @@
 %%
 -spec start() -> ok | {error, Reason :: term()}.
 start() ->
-    application:ensure_started(pipesock),
-    application:ensure_started(shackle).
+    ok = application:ensure_started(pipesock),
+    {ok, _} = application:ensure_all_started(shackle),
+    ok.
 
 -spec stop() -> ok | {error, Reason :: term()}.
 stop() ->
