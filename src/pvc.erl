@@ -159,11 +159,13 @@
 %%
 -spec start() -> ok | {error, Reason :: term()}.
 start() ->
-    application:ensure_started(pipesock).
+    application:ensure_started(pipesock),
+    application:ensure_started(shackle).
 
 -spec stop() -> ok | {error, Reason :: term()}.
 stop() ->
-    application:stop(pipesock).
+    application:stop(pipesock),
+    application:stop(shackle).
 
 %%====================================================================
 %% API functions

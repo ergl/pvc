@@ -4,7 +4,6 @@
 
 %% API
 -export([new/5,
-         close/1,
          uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
@@ -12,6 +11,7 @@
          update_op/4,
          commit/2]).
 
+-type conn_pool() :: atom().
 
 -record(coordinator, {
     %% The IP we're using to talk to the server
@@ -24,7 +24,7 @@
     replica_id = ignore :: replica_id(),
 
     %% Opened connection, one per node in the cluster
-    sockets :: #{inet:ip_address() => inet:socket()},
+    conn_pool :: #{inet:ip_address() => conn_pool()},
 
     coordinator_id :: non_neg_integer()
 }).
@@ -42,46 +42,26 @@
 -opaque coord() :: #coordinator{}.
 -opaque tx() :: #transaction{}.
 
--export_type([coord/0, tx/0]).
+-export_type([conn_pool/0, coord/0, tx/0]).
 
 -spec new(ReplicaId :: term(),
+          LocalIP :: inet:ip_address(),
           CoordId :: non_neg_integer(),
           RingInfo :: pvc_ring:ring(),
-          Nodes :: [inet:ip_address()],
-          Port :: inet:port_number()) -> {ok, coord()}.
-new(ReplicaId, CoordId, RingInfo, Nodes, Port) ->
+          NodePool :: #{inet:ip_address() => conn_pool()}) -> {ok, coord()}.
 
-    Sockets = lists:foldl(fun(Node, Acc) ->
-        {ok, S} = gen_tcp:connect(Node, Port, [{active, false}, {packet, 4}, binary]),
-        Acc#{Node => S}
-    end, #{}, Nodes),
-
-    [Main | _] = Nodes,
-    S = maps:get(Main, Sockets),
-    {ok, {LocalIP, _}} = inet:sockname(S),
-
+new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool) ->
     {ok, #coordinator{self_ip=list_to_binary(inet:ntoa(LocalIP)),
                       ring = RingInfo,
                       replica_id=ReplicaId,
-                      sockets=Sockets,
+                      conn_pool=NodePool,
                       coordinator_id=CoordId}}.
 
--spec close(coord()) -> ok.
-close(#coordinator{sockets=Sockets}) ->
-    [ gen_tcp:close(S) || {_, S} <- maps:to_list(Sockets) ],
-    ok.
-
 -spec uniform_barrier(coord(), rvc()) -> ok.
-uniform_barrier(#coordinator{coordinator_id=Id, ring=Ring, sockets=Socks}, CVC) ->
+uniform_barrier(#coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}, CVC) ->
     {Partition, Node} = pvc_ring:random_indexnode(Ring),
-    S = maps:get(Node, Socks),
-    ok = gen_tcp:send(S, <<Id:16, (ppb_grb_driver:uniform_barrier(Partition, CVC))/binary>>),
-    case gen_tcp:recv(S, 0) of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, <<Id:16, RawReply/binary>>} ->
-            pvc_proto:decode_serv_reply(RawReply)
-    end.
+    Pool = maps:get(Node, Pools),
+    ok = pvc_shackle_transport:uniform_barrier(Pool, Id, Partition, CVC).
 
 -spec start_transaction(coord(), non_neg_integer()) -> {ok, tx()}.
 start_transaction(Coord, Id) ->
@@ -111,16 +91,10 @@ commit(Coord, Tx) -> commit_internal(Coord, Tx).
 %% Read Internal functions
 %%====================================================================
 
-start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, sockets=Socks}) ->
+start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}) ->
     {P, N} = pvc_ring:random_indexnode(Ring),
-    S = maps:get(N, Socks),
-    ok = gen_tcp:send(S, <<Id:16, (ppb_grb_driver:start_tx(P, CVC))/binary>>),
-    case gen_tcp:recv(S, 0) of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, <<Id:16, RawReply/binary>>} ->
-            pvc_proto:decode_serv_reply(RawReply)
-    end.
+    Pool = maps:get(N, Pools),
+    pvc_shackle_transport:start_transaction(Pool, Id, P, CVC).
 
 -spec op_internal(coord(), term(), rvc(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 op_internal(Coord, Key, SVC, RWS) ->
@@ -133,13 +107,11 @@ op_internal(Coord, Key, Val, SVC, RWS) ->
     {NewVal, pvc_grb_rws:put_op(Idx, Key, Val, RedTS, RWS)}.
 
 -spec send_op_internal(coord(), term(), term(), rvc()) -> {index_node(), term(), non_neg_integer()}.
-send_op_internal(#coordinator{ring=Ring, coordinator_id=Id, sockets=Socks}, Key, Val, SVC) ->
+send_op_internal(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools}, Key, Val, SVC) ->
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-    S = maps:get(N, Socks),
-    ok = gen_tcp:send(S, <<Id:16, (ppb_grb_driver:op_request(P, SVC, Key, Val))/binary>>),
-    {ok, <<Id:16, RawReply/binary>>} = gen_tcp:recv(S, 0),
-    {ok, NewVal, RedTS} = pvc_proto:decode_serv_reply(RawReply),
-    {Idx, NewVal, RedTS}.
+    Pool = maps:get(N, Pools),
+    {ok, NewVal, RedTs} = pvc_shackle_transport:op_request(Pool, Id, P, SVC, Key, Val),
+    {Idx, NewVal, RedTs}.
 
 -spec commit_internal(coord(), tx()) -> rvc().
 commit_internal(Coord, Tx) ->
@@ -148,25 +120,23 @@ commit_internal(Coord, Tx) ->
     CVC.
 
 -spec prepare_blue(coord(), tx()) -> rvc().
-prepare_blue(#coordinator{sockets=Socks, coordinator_id=Id, replica_id=RId}, Tx) ->
+prepare_blue(#coordinator{conn_pool=Pools, coordinator_id=Id, replica_id=RId}, Tx) ->
     #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
-    Sockets = pvc_grb_rws:fold(fun(Node, Partitions, SockAcc) ->
-        S = maps:get(Node, Socks),
+    ReqIds = pvc_grb_rws:fold(fun(Node, Partitions, ReqAcc) ->
+        Pool = maps:get(Node, Pools),
         Prepares = maps:fold(fun(Partition, {_, WS}, Acc) ->
             [{Partition, WS} | Acc]
         end, [], Partitions),
-        Msg = ppb_grb_driver:prepare_blue_node(TxId, SVC, Prepares),
-        ok = gen_tcp:send(S, <<Id:16, Msg/binary>>),
-        [S | SockAcc]
+        {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, Id, TxId, SVC, Prepares),
+        [ReqId | ReqAcc]
     end, [], RWS),
-    collect(Sockets, Id, RId, SVC).
+    collect(ReqIds, Id, RId, SVC).
 
 -spec collect([inet:socket()], non_neg_integer(), term(), rvc()) -> rvc().
 collect([], _, _, CVC) -> CVC;
-collect([S | Rest], Id, ReplicaId, CVC) ->
-    {ok, <<Id:16, RawReply/binary>>} = gen_tcp:recv(S, 0),
-    Reply = pvc_proto:decode_serv_reply(RawReply),
-    collect(Rest, Id, ReplicaId, update_vote(Reply, ReplicaId, CVC)).
+collect([ReqId | Rest], Id, ReplicaId, CVC) ->
+    Votes = shackle:receive_response(ReqId),
+    collect(Rest, Id, ReplicaId, update_vote(Votes, ReplicaId, CVC)).
 
 -spec update_vote([{ok, partition_id(), non_neg_integer()}, ...], replica_id(), rvc()) -> rvc().
 update_vote(Votes, ReplicaId, CVC) ->
@@ -177,10 +147,10 @@ update_vote(Votes, ReplicaId, CVC) ->
     end, CVC, Votes).
 
 -spec decide_blue(coord(), tx(), rvc()) -> ok.
-decide_blue(#coordinator{sockets=Socks, coordinator_id=Id}, Tx, CVC) ->
+decide_blue(#coordinator{conn_pool=Pools, coordinator_id=Id}, Tx, CVC) ->
     #transaction{rws=RWS, id=TxId} = Tx,
     ok = pvc_grb_rws:fold(fun(Node, Partitions, _) ->
-        S = maps:get(Node, Socks),
+        Pool = maps:get(Node, Pools),
         DecidePartitions = maps:keys(Partitions),
-        ok = gen_tcp:send(S, <<Id:16, (ppb_grb_driver:decide_blue_node(TxId, DecidePartitions, CVC))/binary>>)
+        ok = pvc_shackle_transport:decide_blue(Pool, Id, TxId, DecidePartitions, CVC)
     end, ok, RWS).
