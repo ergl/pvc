@@ -20,19 +20,19 @@
 
 -spec uniform_barrier(atom(), non_neg_integer(), term(), term()) -> ok.
 uniform_barrier(Pool, Id, Partition, CVC) ->
-    shackle:call(Pool, {uniform_barrier, Id, Partition, CVC}).
+    shackle:call(Pool, {uniform_barrier, Id, Partition, CVC}, infinity).
 
 -spec start_transaction(atom(), non_neg_integer(), term(), term()) -> {ok, term()}.
 start_transaction(Pool, Id, Partition, CVC) ->
-    shackle:call(Pool, {start_tx, Id, Partition, CVC}).
+    shackle:call(Pool, {start_tx, Id, Partition, CVC}, infinity).
 
 -spec op_request(atom, non_neg_integer(), term(), term(), term(), term()) -> {ok, term(), non_neg_integer()}.
 op_request(Pool, Id, Partition, SVC, Key, Val) ->
-    shackle:call(Pool, {op_request, Id, Partition, SVC, Key, Val}).
+    shackle:call(Pool, {op_request, Id, Partition, SVC, Key, Val}, infinity).
 
 -spec prepare_blue(atom(), non_neg_integer(), term(), term(), [term()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, Id, TxId, SVC, Prepares) ->
-    shackle:cast(Pool, {prepare_blue, Id, TxId, SVC, Prepares}).
+    shackle:cast(Pool, {prepare_blue, Id, TxId, SVC, Prepares}, infinity).
 
 -spec decide_blue(atom(), non_neg_integer(), term(), [term()], term()) -> ok.
 decide_blue(Pool, Id, TxId, Partitions, CVC) ->
