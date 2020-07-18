@@ -32,7 +32,7 @@ op_request(Pool, Id, Partition, SVC, Key, Val) ->
 
 -spec prepare_blue(atom(), non_neg_integer(), term(), term(), [term()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, Id, TxId, SVC, Prepares) ->
-    shackle:cast(Pool, {prepare_blue, Id, TxId, SVC, Prepares}, infinity).
+    shackle:cast(Pool, {prepare_blue, Id, TxId, SVC, Prepares}, self(), infinity).
 
 -spec decide_blue(atom(), non_neg_integer(), term(), [term()], term()) -> ok.
 decide_blue(Pool, Id, TxId, Partitions, CVC) ->
