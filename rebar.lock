@@ -1,4 +1,7 @@
-[{<<"pipesock">>,
+{"1.1.0",
+[{<<"foil">>,{pkg,<<"foil">>,<<"0.1.1">>},1},
+ {<<"metal">>,{pkg,<<"metal">>,<<"0.1.1">>},1},
+ {<<"pipesock">>,
   {git,"https://github.com/ergl/pipesock.git",
        {ref,"0bde8134bf0152dca714b4de1f248c9dc73a1d34"}},
   0},
@@ -9,4 +12,17 @@
  {<<"pvc_types">>,
   {git,"https://github.com/ergl/pvc_types.git",
        {ref,"f9f34cca44273e0de791e0bbceb0806eaadc71ca"}},
-  0}].
+  0},
+ {<<"quickrand">>,
+  {git,"https://github.com/okeuday/quickrand.git",
+       {ref,"b189accc1686a95b0ff1478521b21a65e372a614"}},
+  1},
+ {<<"shackle">>,
+  {git,"https://github.com/ergl/shackle.git",
+       {ref,"1ededcdc4a0f1447b7f98afda4dda91cc33f158b"}},
+  0}]}.
+[
+{pkg_hash,[
+ {<<"foil">>, <<"4D07B62C114636BBC3EEBD5CEE04B23A7AAB1262B0F68AA79005A6FBC3790472">>},
+ {<<"metal">>, <<"5D3D1322DA7BCD34B94FED5486F577973685298883954F7A3E517EF5EF6953F5">>}]}
+].

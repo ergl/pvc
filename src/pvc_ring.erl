@@ -75,7 +75,7 @@ partition_info_internal(Socket) ->
 %%      as well as the replica identifier from the cluster.
 %%
 -spec grb_replica_info(Address :: node_ip(),
-                       Port :: inet:port_number()) -> {ok, term(), ring(), unique_nodes()}
+                       Port :: inet:port_number()) -> {ok, inet:ip_address(), term(), ring(), unique_nodes()}
                                                     | socket_error().
 
 grb_replica_info(Address, Port) ->
@@ -83,6 +83,7 @@ grb_replica_info(Address, Port) ->
         {error, Reason} ->
             {error, Reason};
         {ok, Sock} ->
+            {ok, {LocalIP, _}} = inet:sockname(Sock),
             %% FIXME(borja): Hack to fit in message identifiers
             ok = gen_tcp:send(Sock, <<0:16, (ppb_grb_driver:connect())/binary>>),
             Reply = case gen_tcp:recv(Sock, 0) of
@@ -92,7 +93,7 @@ grb_replica_info(Address, Port) ->
                     {ok, ReplicaID, RingSize, RawRing} = pvc_proto:decode_serv_reply(RawReply),
                     UniqueNodes = unique_ring_nodes(RawRing),
                     FixedRing = make_fixed_ring(RingSize, RawRing),
-                    {ok, ReplicaID, #ring{size=RingSize, fixed_ring=FixedRing}, UniqueNodes}
+                    {ok, LocalIP, ReplicaID, #ring{size=RingSize, fixed_ring=FixedRing}, UniqueNodes}
             end,
             ok = gen_tcp:close(Sock),
             Reply

@@ -2,7 +2,7 @@
     [{description, "PVC client coordinator library"},
      {vsn, "0.12.1"},
      {registered, []},
-     {applications, [kernel, stdlib, pipesock]},
+     {applications, [kernel, stdlib, pipesock, shackle]},
      {env,[]},
      {modules, []},
      {maintainers, []},
