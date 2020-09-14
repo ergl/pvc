@@ -16,7 +16,8 @@
 -export([new/0,
          put_op/5,
          put_ronly_op/4,
-         fold/3]).
+         fold/3,
+         make_red_prepares/1]).
 
 -spec new() -> t().
 new() ->
@@ -48,3 +49,11 @@ put_op({Partition, Node}, Key, Val, RedTS, Map) ->
 
 fold(Fun, Acc, RWS) ->
     maps:fold(Fun, Acc, RWS).
+
+-spec make_red_prepares(t()) -> [{partition_id(), rs(), ws()}].
+make_red_prepares(RWS) ->
+    fold(fun(_, Inner, Acc0) ->
+        fold(fun(P, {RS, WS}, Acc) ->
+            [{P, RS, WS} | Acc]
+        end, Acc0, Inner)
+    end, [], RWS).

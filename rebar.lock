@@ -1,4 +1,4 @@
-{"1.1.0",
+{"1.2.0",
 [{<<"foil">>,{pkg,<<"foil">>,<<"0.1.1">>},1},
  {<<"metal">>,{pkg,<<"metal">>,<<"0.1.1">>},1},
  {<<"pipesock">>,
@@ -7,7 +7,7 @@
   0},
  {<<"pvc_proto">>,
   {git,"https://github.com/ergl/pvc_proto.git",
-       {ref,"b4f800d616fd572be7c7c1d7867d1c8e05a2449d"}},
+       {ref,"24d60cedbbdacfcf3b3bc328bcd98cf18d1d2535"}},
   0},
  {<<"pvc_types">>,
   {git,"https://github.com/ergl/pvc_types.git",
@@ -24,5 +24,8 @@
 [
 {pkg_hash,[
  {<<"foil">>, <<"4D07B62C114636BBC3EEBD5CEE04B23A7AAB1262B0F68AA79005A6FBC3790472">>},
- {<<"metal">>, <<"5D3D1322DA7BCD34B94FED5486F577973685298883954F7A3E517EF5EF6953F5">>}]}
+ {<<"metal">>, <<"5D3D1322DA7BCD34B94FED5486F577973685298883954F7A3E517EF5EF6953F5">>}]},
+{pkg_hash_ext,[
+ {<<"foil">>, <<"CD5F4B6D518168E97D0F8A5D79EEE4D3625EEF1ED33790BA037ACCAD22C7F455">>},
+ {<<"metal">>, <<"88B82B634998A1A768DEDCD372C2F7E657B19445325C0AF5CCBAC62C77210F1D">>}]}
 ].

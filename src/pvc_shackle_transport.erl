@@ -5,7 +5,8 @@
          start_transaction/4,
          op_request/6,
          prepare_blue/5,
-         decide_blue/5]).
+         decide_blue/5,
+         commit_red/5]).
 
 %% API
 -export([init/1,
@@ -38,6 +39,10 @@ prepare_blue(Pool, Id, TxId, SVC, Prepares) ->
 decide_blue(Pool, Id, TxId, Partitions, CVC) ->
     shackle:call(Pool, {decide_blue, Id, TxId, Partitions, CVC}).
 
+-spec commit_red(atom(), non_neg_integer(), term(), term(), [term()]) -> {ok, term()} | {abort, term()}.
+commit_red(Pool, Id, TxId, SVC, Prepares) ->
+    shackle:call(Pool, {commit_red, Id, TxId, SVC, Prepares}, infinity).
+
 init(Options) ->
     {ok, #state{id_len = maps:get(id_len, Options, 16)}}.
 
@@ -58,6 +63,9 @@ handle_request({prepare_blue, Id, TxId, SVC, Prepares}, State=#state{id_len=IdLe
 
 handle_request({decide_blue, Id, TxId, Partitions, CVC}, State=#state{id_len=IdLen}) ->
     {ok, <<Id:IdLen, (ppb_grb_driver:decide_blue_node(TxId, Partitions, CVC))/binary>>, State};
+
+handle_request({commit_red, Id, TxId, SVC, Prepares}, State=#state{id_len=IdLen}) ->
+    {ok, Id, <<Id:IdLen, (ppb_grb_driver:commit_red(TxId, SVC, Prepares))/binary>>, State};
 
 handle_request(_Request, _State) ->
     erlang:error(unknown_request).

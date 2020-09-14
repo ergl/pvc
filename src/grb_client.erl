@@ -9,7 +9,8 @@
          start_transaction/3,
          read_op/3,
          update_op/4,
-         commit/2]).
+         commit/2,
+         commit_red/2]).
 
 -type conn_pool() :: atom().
 
@@ -86,6 +87,15 @@ update_op(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key, Val) ->
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
 commit(Coord, Tx) -> commit_internal(Coord, Tx).
+
+-spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
+commit_red(Coord, Tx) ->
+    #coordinator{conn_pool=Pools, ring=Ring, coordinator_id=Id} = Coord,
+    #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
+    {_, CoordNode} = pvc_ring:random_indexnode(Ring),
+    Pool = maps:get(CoordNode, Pools),
+    Prepares = pvc_grb_rws:make_red_prepares(RWS),
+    pvc_shackle_transport:commit_red(Pool, Id, TxId, SVC, Prepares).
 
 %%====================================================================
 %% Read Internal functions
