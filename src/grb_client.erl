@@ -108,20 +108,20 @@ start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools})
 
 -spec op_internal(coord(), term(), rvc(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 op_internal(Coord, Key, SVC, RWS) ->
-    {Idx, NewVal, RedTS} = send_op_internal(Coord, Key, <<>>, SVC),
-    {NewVal, pvc_grb_rws:put_ronly_op(Idx, Key, RedTS, RWS)}.
+    {Idx, NewVal} = send_op_internal(Coord, Key, <<>>, SVC),
+    {NewVal, pvc_grb_rws:put_ronly_op(Idx, Key, RWS)}.
 
 -spec op_internal(coord(), term(), term(), rvc(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 op_internal(Coord, Key, Val, SVC, RWS) ->
-    {Idx, NewVal, RedTS} = send_op_internal(Coord, Key, Val, SVC),
-    {NewVal, pvc_grb_rws:put_op(Idx, Key, Val, RedTS, RWS)}.
+    {Idx, NewVal} = send_op_internal(Coord, Key, Val, SVC),
+    {NewVal, pvc_grb_rws:put_op(Idx, Key, Val, RWS)}.
 
--spec send_op_internal(coord(), term(), term(), rvc()) -> {index_node(), term(), non_neg_integer()}.
+-spec send_op_internal(coord(), term(), term(), rvc()) -> {index_node(), term()}.
 send_op_internal(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools}, Key, Val, SVC) ->
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, NewVal, RedTs} = pvc_shackle_transport:op_request(Pool, Id, P, SVC, Key, Val),
-    {Idx, NewVal, RedTs}.
+    {ok, NewVal} = pvc_shackle_transport:op_request(Pool, Id, P, SVC, Key, Val),
+    {Idx, NewVal}.
 
 -spec commit_internal(coord(), tx()) -> rvc().
 commit_internal(Coord, Tx) ->

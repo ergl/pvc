@@ -27,7 +27,7 @@ uniform_barrier(Pool, Id, Partition, CVC) ->
 start_transaction(Pool, Id, Partition, CVC) ->
     shackle:call(Pool, {start_tx, Id, Partition, CVC}, infinity).
 
--spec op_request(atom, non_neg_integer(), term(), term(), term(), term()) -> {ok, term(), non_neg_integer()}.
+-spec op_request(atom, non_neg_integer(), term(), term(), term(), term()) -> {ok, term()}.
 op_request(Pool, Id, Partition, SVC, Key, Val) ->
     shackle:call(Pool, {op_request, Id, Partition, SVC, Key, Val}, infinity).
 
