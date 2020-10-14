@@ -3,7 +3,7 @@
 -include("pvc.hrl").
 
 %% API
--export([new/5,
+-export([new/6,
          uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
@@ -26,6 +26,11 @@
 
     %% Opened connection, one per node in the cluster
     conn_pool :: #{inet:ip_address() => conn_pool()},
+    %% Connection used for red commit, one per node in the cluster
+    %% We use a separate connection for red commit to increase utilization:
+    %% since clients wait for a long time (cross-replica RTT), it's enough to
+    %% have a single connection.
+    red_connections :: #{inet:ip_address() => pvc_red_connection:t()},
 
     coordinator_id :: non_neg_integer()
 }).
@@ -49,13 +54,15 @@
           LocalIP :: inet:ip_address(),
           CoordId :: non_neg_integer(),
           RingInfo :: pvc_ring:ring(),
-          NodePool :: #{inet:ip_address() => conn_pool()}) -> {ok, coord()}.
+          NodePool :: #{inet:ip_address() => conn_pool()},
+          RedConnections :: #{inet:ip_address() => pvc_red_connection:t()}) -> {ok, coord()}.
 
-new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool) ->
+new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool, RedConnections) ->
     {ok, #coordinator{self_ip=list_to_binary(inet:ntoa(LocalIP)),
                       ring = RingInfo,
                       replica_id=ReplicaId,
                       conn_pool=NodePool,
+                      red_connections=RedConnections,
                       coordinator_id=CoordId}}.
 
 -spec uniform_barrier(coord(), rvc()) -> ok.
@@ -90,12 +97,12 @@ commit(Coord, Tx) -> commit_internal(Coord, Tx).
 
 -spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx) ->
-    #coordinator{conn_pool=Pools, ring=Ring, coordinator_id=Id} = Coord,
+    #coordinator{red_connections=RedConns, ring=Ring, coordinator_id=Id} = Coord,
     #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
     {_, CoordNode} = pvc_ring:random_indexnode(Ring),
-    Pool = maps:get(CoordNode, Pools),
+    ConnHandle = maps:get(CoordNode, RedConns),
     Prepares = pvc_grb_rws:make_red_prepares(RWS),
-    pvc_shackle_transport:commit_red(Pool, Id, TxId, SVC, Prepares).
+    pvc_red_connection:commit_red(ConnHandle, Id, TxId, SVC, Prepares).
 
 %%====================================================================
 %% Read Internal functions
