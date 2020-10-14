@@ -5,6 +5,7 @@
 %% API
 -export([partition_info/2,
          grb_replica_info/2,
+         grb_replica_info/3,
          random_indexnode/1,
          get_key_indexnode/2,
          get_key_indexnode/3]).
@@ -76,20 +77,26 @@ partition_info_internal(Socket) ->
 %%
 -spec grb_replica_info(Address :: node_ip(),
                        Port :: inet:port_number()) -> {ok, inet:ip_address(), term(), ring(), unique_nodes()}
-                                                    | socket_error().
-
+                                                      | socket_error().
 grb_replica_info(Address, Port) ->
+    grb_replica_info(Address, Port, 16).
+
+-spec grb_replica_info(Address :: node_ip(),
+                       Port :: inet:port_number(),
+                       LenBits :: non_neg_integer()) -> {ok, inet:ip_address(), term(), ring(), unique_nodes()}
+                                                        | socket_error().
+
+grb_replica_info(Address, Port, LenBits) ->
     case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
         {error, Reason} ->
             {error, Reason};
         {ok, Sock} ->
             {ok, {LocalIP, _}} = inet:sockname(Sock),
-            %% FIXME(borja): Hack to fit in message identifiers
-            ok = gen_tcp:send(Sock, <<0:16, (ppb_grb_driver:connect())/binary>>),
+            ok = gen_tcp:send(Sock, <<0:LenBits, (ppb_grb_driver:connect())/binary>>),
             Reply = case gen_tcp:recv(Sock, 0) of
                 {error, Reason} ->
                     {error, Reason};
-                {ok, <<0:16, RawReply/binary>>} ->
+                {ok, <<0:LenBits, RawReply/binary>>} ->
                     {ok, ReplicaID, RingSize, RawRing} = pvc_proto:decode_serv_reply(RawReply),
                     UniqueNodes = unique_ring_nodes(RawRing),
                     FixedRing = make_fixed_ring(RingSize, RawRing),
