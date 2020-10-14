@@ -57,7 +57,7 @@ commit_red(Handler, Id, TxId, SVC, Prepares) ->
     true = ets:insert_new(Owners, {Id, self()}),
     ok = gen_tcp:send(Socket, Msg),
     receive
-        {?MODULE, Socket, Data} -> Data
+        {?MODULE, Socket, Data} -> pvc_proto:decode_serv_reply(Data)
     end.
 
 %%%===================================================================
@@ -93,7 +93,7 @@ handle_info({tcp, Socket, Data}, State=#state{socket=Socket, id_len=IdLen, msg_o
         <<Id:IdLen, RawReply/binary>> ->
             case ets:take(Owners, Id) of
                 [{Id, SenderPid}] ->
-                    SenderPid ! {?MODULE, Socket, pvc_proto:decode_serv_reply(RawReply)};
+                    SenderPid ! {?MODULE, Socket, RawReply};
                 [] ->
                     %% todo(borja): ???
                     ok
