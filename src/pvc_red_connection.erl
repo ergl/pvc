@@ -1,9 +1,10 @@
 -module(pvc_red_connection).
+-include("pvc.hrl").
 -behavior(gen_server).
 
 -export([start_connection/3]).
 
--export([commit_red/5]).
+-export([commit_red/6]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -50,10 +51,10 @@ make_handler(Pid, IdLen) ->
     Handler = #handler{conn_pid=Pid, socket=Socket, msg_owners=Owners, id_len=IdLen},
     {ok, Handler}.
 
--spec commit_red(t(), non_neg_integer(), term(), term(), term()) -> ok.
-commit_red(Handler, Id, TxId, SVC, Prepares) ->
+-spec commit_red(t(), non_neg_integer(), partition_id(), term(), #{replica_id() => non_neg_integer()}, [{partition_id(), [], #{}}]) -> ok.
+commit_red(Handler, Id, Partition, TxId, SVC, Prepares) ->
     #handler{socket=Socket, msg_owners=Owners, id_len=IdLen} = Handler,
-    Msg = <<Id:IdLen, (ppb_grb_driver:commit_red(TxId, SVC, Prepares))/binary>>,
+    Msg = <<Id:IdLen, (ppb_grb_driver:commit_red(Partition, TxId, SVC, Prepares))/binary>>,
     true = ets:insert_new(Owners, {Id, self()}),
     ok = gen_tcp:send(Socket, Msg),
     receive

@@ -1,5 +1,4 @@
 -module(grb_client).
-
 -include("pvc.hrl").
 
 %% API
@@ -44,7 +43,7 @@
     read_only = true :: boolean(),
     rws = pvc_grb_rws:new() :: pvc_grb_rws:t(),
     %% at which node did we start the transaction?
-    start_node :: node_ip()
+    start_node :: index_node()
 }).
 
 -opaque coord() :: #coordinator{}.
@@ -100,21 +99,21 @@ commit(Coord, Tx) -> commit_internal(Coord, Tx).
 -spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx) ->
     #coordinator{red_connections=RedConns, coordinator_id=Id} = Coord,
-    #transaction{rws=RWS, id=TxId, vc=SVC, start_node=CoordNode} = Tx,
+    #transaction{rws=RWS, id=TxId, vc=SVC, start_node={Partition, CoordNode}} = Tx,
     ConnHandle = maps:get(CoordNode, RedConns),
     Prepares = pvc_grb_rws:make_red_prepares(RWS),
-    pvc_red_connection:commit_red(ConnHandle, Id, TxId, SVC, Prepares).
+    pvc_red_connection:commit_red(ConnHandle, Id, Partition, TxId, SVC, Prepares).
 
 %%====================================================================
 %% Read Internal functions
 %%====================================================================
 
--spec start_internal(rvc(), coord()) -> {ok, rvc(), node_ip()}.
+-spec start_internal(rvc(), coord()) -> {ok, rvc(), index_node()}.
 start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}) ->
-    {P, N} = pvc_ring:random_indexnode(Ring),
+    Idx={P, N} = pvc_ring:random_indexnode(Ring),
     Pool = maps:get(N, Pools),
     {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, Id, P, CVC),
-    {ok, SVC, N}.
+    {ok, SVC, Idx}.
 
 -spec op_internal(coord(), term(), rvc(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 op_internal(Coord, Key, SVC, RWS) ->
