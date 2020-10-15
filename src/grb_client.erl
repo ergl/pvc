@@ -42,7 +42,9 @@
     id :: transaction_id(),
     vc = pvc_vclock:new() :: rvc(),
     read_only = true :: boolean(),
-    rws = pvc_grb_rws:new() :: pvc_grb_rws:t()
+    rws = pvc_grb_rws:new() :: pvc_grb_rws:t(),
+    %% at which node did we start the transaction?
+    start_node :: node_ip()
 }).
 
 -opaque coord() :: #coordinator{}.
@@ -77,8 +79,8 @@ start_transaction(Coord, Id) ->
 
 -spec start_transaction(coord(), non_neg_integer(), rvc()) -> {ok, tx()}.
 start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CVC) ->
-    {ok, SVC} = start_internal(CVC, Coord),
-    {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC}}.
+    {ok, SVC, StartNode} = start_internal(CVC, Coord),
+    {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
 %% todo(borja): parallel read
 -spec read_op(coord(), tx(), term()) -> {ok, term(), tx()}.
@@ -97,9 +99,8 @@ commit(Coord, Tx) -> commit_internal(Coord, Tx).
 
 -spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx) ->
-    #coordinator{red_connections=RedConns, ring=Ring, coordinator_id=Id} = Coord,
-    #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
-    {_, CoordNode} = pvc_ring:random_indexnode(Ring),
+    #coordinator{red_connections=RedConns, coordinator_id=Id} = Coord,
+    #transaction{rws=RWS, id=TxId, vc=SVC, start_node=CoordNode} = Tx,
     ConnHandle = maps:get(CoordNode, RedConns),
     Prepares = pvc_grb_rws:make_red_prepares(RWS),
     pvc_red_connection:commit_red(ConnHandle, Id, TxId, SVC, Prepares).
@@ -108,10 +109,12 @@ commit_red(Coord, Tx) ->
 %% Read Internal functions
 %%====================================================================
 
+-spec start_internal(rvc(), coord()) -> {ok, rvc(), node_ip()}.
 start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}) ->
     {P, N} = pvc_ring:random_indexnode(Ring),
     Pool = maps:get(N, Pools),
-    pvc_shackle_transport:start_transaction(Pool, Id, P, CVC).
+    {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, Id, P, CVC),
+    {ok, SVC, N}.
 
 -spec op_internal(coord(), term(), rvc(), pvc_grb_rws:t()) -> {term(), pvc_grb_rws:t()}.
 op_internal(Coord, Key, SVC, RWS) ->
