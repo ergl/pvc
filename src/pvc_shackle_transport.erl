@@ -3,7 +3,7 @@
 
 -export([uniform_barrier/4,
          start_transaction/4,
-         op_request/6,
+         get_key_version/5,
          prepare_blue/5,
          decide_blue/5]).
 
@@ -26,9 +26,9 @@ uniform_barrier(Pool, Id, Partition, CVC) ->
 start_transaction(Pool, Id, Partition, CVC) ->
     shackle:call(Pool, {start_tx, Id, Partition, CVC}, infinity).
 
--spec op_request(atom, non_neg_integer(), term(), term(), term(), term()) -> {ok, term()}.
-op_request(Pool, Id, Partition, SVC, Key, Val) ->
-    shackle:call(Pool, {op_request, Id, Partition, SVC, Key, Val}, infinity).
+-spec get_key_version(atom(), non_neg_integer(), term(), term(), binary) -> {ok, binary()}.
+get_key_version(Pool, Id, Partition, SVC, Key) ->
+    shackle:call(Pool, {get_key_vsn, Id, Partition, SVC, Key}, infinity).
 
 -spec prepare_blue(atom(), non_neg_integer(), term(), term(), [term()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, Id, TxId, SVC, Prepares) ->
@@ -50,8 +50,8 @@ handle_request({uniform_barrier, Id, Partition, CVC}, State=#state{id_len=IdLen}
 handle_request({start_tx, Id, Partition, CVC}, State=#state{id_len=IdLen}) ->
     {ok, Id, <<Id:IdLen, (ppb_grb_driver:start_tx(Partition, CVC))/binary>>, State};
 
-handle_request({op_request, Id, Partition, SVC, Key, Val}, State=#state{id_len=IdLen}) ->
-    {ok, Id, <<Id:IdLen, (ppb_grb_driver:op_request(Partition, SVC, Key, Val))/binary>>, State};
+handle_request({get_key_vsn, Id, Partition, SVC, Key}, State=#state{id_len=IdLen}) ->
+    {ok, Id, <<Id:IdLen, (ppb_grb_driver:key_version(Partition, SVC, Key))/binary>>, State};
 
 handle_request({prepare_blue, Id, TxId, SVC, Prepares}, State=#state{id_len=IdLen}) ->
     {ok, Id, <<Id:IdLen, (ppb_grb_driver:prepare_blue_node(TxId, SVC, Prepares))/binary>>, State};
