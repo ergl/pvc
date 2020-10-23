@@ -16,7 +16,7 @@
 -export([new/0,
          put_op/4,
          put_ronly_op/3,
-         fold/3,
+         fold_updates/3,
          make_red_prepares/1]).
 
 -spec new() -> t().
@@ -25,23 +25,50 @@ new() ->
 
 -spec put_ronly_op(index_node(), term(), t()) -> t().
 put_ronly_op({Partition, Node}, Key, Map) ->
-    %% Peel downwards
-    PRWS0 = maps:get(Node, Map, #{}),
-    {InnerRS, WS} = maps:get(Partition, PRWS0, {#{}, #{}}),
-    %% Update updwards
-    InnerSet1 = {maps:put(Key, undefined, InnerRS), WS},
-    PRWS1 = maps:put(Partition, InnerSet1, PRWS0),
-    maps:put(Node, PRWS1, Map).
+    Inner = maps:get(Node, Map, #{}),
+    Map#{Node => Inner#{Partition =>
+        case maps:get(Partition, Inner, undefined) of
+            undefined ->
+                { #{Key => undefined}, #{} };
+            {RS, WS} ->
+                { RS#{Key => undefined}, WS }
+        end
+    }}.
 
 -spec put_op(index_node(), term(), term(), t()) -> t().
 put_op({Partition, Node}, Key, Val, Map) ->
-    %% Peel downwards
-    PRWS0 = maps:get(Node, Map, #{}),
-    {InnerRS, InnerWS} = maps:get(Partition, PRWS0, {#{}, #{}}),
-    %% Update updwards
-    InnerSet1 = {maps:put(Key, undefined, InnerRS), maps:put(Key, Val, InnerWS)},
-    PRWS1 = maps:put(Partition, InnerSet1, PRWS0),
-    maps:put(Node, PRWS1, Map).
+    Inner = maps:get(Node, Map, #{}),
+    Map#{Node => Inner#{Partition =>
+        case maps:get(Partition, Inner, undefined) of
+            undefined ->
+                { #{Key => undefined}, #{Key => Val} };
+            {RS, WS} ->
+                { RS#{Key => undefined}, WS#{Key => Val} }
+        end
+    }}.
+
+-spec fold_updates(Fun :: fun((node_ip(), [partition_id()], [{partition_id(), ws()}], term()) -> term()),
+                   Acc :: term(),
+                   RWS :: t()) -> term().
+
+fold_updates(Fun, Acc, RWS) when is_function(Fun, 4) ->
+    fold_updates_(Fun, maps:iterator(RWS), Acc).
+
+fold_updates_(Fun, Iterator, ClientAcc) ->
+    case maps:next(Iterator) of
+        none ->
+            ClientAcc;
+        {Node, Inner, Next} ->
+            {Updated, Partitions} = maps:fold(fun
+                (Partition, {_, WS}, {PrepareAcc, PartitionAcc}) when map_size(WS) =/= 0 ->
+                    {
+                        [{Partition, WS} | PrepareAcc],
+                        [Partition | PartitionAcc]
+                    };
+                (_, _, Acc) -> Acc
+            end, {[], []}, Inner),
+            fold_updates_(Fun, Next, Fun(Node, Partitions, Updated, ClientAcc))
+    end.
 
 -spec fold(Fun :: fun((node_ip(), partitions_readwriteset(), term()) -> term()),
     Acc :: term(),

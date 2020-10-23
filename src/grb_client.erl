@@ -135,22 +135,27 @@ send_vsn_request(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools}, Ke
 
 -spec commit_internal(coord(), tx()) -> rvc().
 commit_internal(Coord, Tx) ->
-    CVC = prepare_blue(Coord, Tx),
-    ok = decide_blue(Coord, Tx, CVC),
+    {Nodes, CVC} = prepare_blue(Coord, Tx),
+    ok = decide_blue(Tx#transaction.id, CVC, Nodes, Coord),
     CVC.
 
--spec prepare_blue(coord(), tx()) -> rvc().
-prepare_blue(#coordinator{conn_pool=Pools, coordinator_id=Id, replica_id=RId}, Tx) ->
+-spec prepare_blue(coord(), tx()) -> {#{node_ip() => [partition_id()]}, rvc()}.
+prepare_blue(#coordinator{conn_pool=Pools, coordinator_id=Id, replica_id=ReplicaId}, Tx) ->
     #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
-    ReqIds = pvc_grb_rws:fold(fun(Node, Partitions, ReqAcc) ->
-        Pool = maps:get(Node, Pools),
-        Prepares = maps:fold(fun(Partition, {_, WS}, Acc) ->
-            [{Partition, WS} | Acc]
-        end, [], Partitions),
-        {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, Id, TxId, SVC, Prepares),
-        [ReqId | ReqAcc]
-    end, [], RWS),
-    collect(ReqIds, Id, RId, SVC).
+    {Requests, Nodes} = pvc_grb_rws:fold_updates(
+        fun(Node, Partitions, Prepares, {ReqAcc, NodeAcc}) ->
+            Pool = maps:get(Node, Pools),
+            {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, Id, TxId, SVC, Prepares),
+            {
+                [ReqId | ReqAcc],
+                NodeAcc#{Node => Partitions}
+            }
+        end,
+        {[], #{}},
+        RWS
+    ),
+
+    {Nodes, collect(Requests, Id, ReplicaId, SVC)}.
 
 -spec collect([inet:socket()], non_neg_integer(), term(), rvc()) -> rvc().
 collect([], _, _, CVC) -> CVC;
@@ -166,11 +171,9 @@ update_vote(Votes, ReplicaId, CVC) ->
                             Acc)
     end, CVC, Votes).
 
--spec decide_blue(coord(), tx(), rvc()) -> ok.
-decide_blue(#coordinator{conn_pool=Pools, coordinator_id=Id}, Tx, CVC) ->
-    #transaction{rws=RWS, id=TxId} = Tx,
-    ok = pvc_grb_rws:fold(fun(Node, Partitions, _) ->
+-spec decide_blue(transaction_id(), rvc(), #{node_ip() => [partition_id()]}, coord()) -> ok.
+decide_blue(TxId, CVC, Nodes, #coordinator{conn_pool=Pools, coordinator_id=Id}) ->
+    maps:fold(fun(Node, Partitions, ok) ->
         Pool = maps:get(Node, Pools),
-        DecidePartitions = maps:keys(Partitions),
-        ok = pvc_shackle_transport:decide_blue(Pool, Id, TxId, DecidePartitions, CVC)
-    end, ok, RWS).
+        pvc_shackle_transport:decide_blue(Pool, Id, TxId, Partitions, CVC)
+    end, ok, Nodes).
