@@ -70,17 +70,10 @@ fold_updates_(Fun, Iterator, ClientAcc) ->
             fold_updates_(Fun, Next, Fun(Node, Partitions, Updated, ClientAcc))
     end.
 
--spec fold(Fun :: fun((node_ip(), partitions_readwriteset(), term()) -> term()),
-    Acc :: term(),
-    RWS :: t()) -> term().
-
-fold(Fun, Acc, RWS) ->
-    maps:fold(Fun, Acc, RWS).
-
 -spec make_red_prepares(t()) -> [{partition_id(), [term()], ws()}].
 make_red_prepares(RWS) ->
-    fold(fun(_, Inner, Acc0) ->
-        fold(fun(P, {RS, WS}, Acc) ->
-            [{P, maps:keys(RS), WS} | Acc]
+    maps:fold(fun(_Node, Inner, Acc0) ->
+        maps:fold(fun(Partition, {RS, WS}, Acc) ->
+            [{Partition, maps:keys(RS), WS} | Acc]
         end, Acc0, Inner)
     end, [], RWS).
