@@ -9,6 +9,7 @@
          read_op/3,
          read_bypass/3,
          update_op/4,
+         update_bypass/4,
          commit/2,
          commit_red/2]).
 
@@ -99,6 +100,10 @@ update_op(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key, Val) ->
     {NewVal, NewRWS} = update_op_internal(Coord, Key, Val, SVC, RWS),
     {ok, NewVal, Tx#transaction{rws=NewRWS, read_only=false}}.
 
+update_bypass(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key, Val) ->
+    {NewVal, NewRWS} = update_bypass_internal(Coord, Key, Val, SVC, RWS),
+    {ok, NewVal, Tx#transaction{rws=NewRWS, read_only=false}}.
+
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
 commit(Coord, Tx) -> commit_internal(Coord, Tx).
@@ -136,6 +141,12 @@ read_bypass_internal(Coord, Key, SVC, RWS) ->
 update_op_internal(Coord, Key, Val, SVC, RWS) ->
     %% todo(borja, crdts): Apply given operation to snapshot
     {Idx, _} = send_vsn_request(Coord, Key, SVC),
+    {Val, pvc_grb_rws:put_op(Idx, Key, Val, RWS)}.
+
+-spec update_bypass_internal(coord(), binary(), binary(), rvc(), pvc_grb_rws:t()) -> {binary(), pvc_grb_rws:t()}.
+update_bypass_internal(Coord, Key, Val, SVC, RWS) ->
+    %% todo(borja, crdts): Apply given operation to snapshot
+    {Idx, _} = send_vsn_request_again(Coord, Key, SVC),
     {Val, pvc_grb_rws:put_op(Idx, Key, Val, RWS)}.
 
 -spec send_vsn_request(coord(), binary(), rvc()) -> {index_node(), binary()}.
