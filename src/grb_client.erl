@@ -6,6 +6,8 @@
          uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
+         start_read/3,
+         start_read/4,
          read_op/3,
          read_bypass/3,
          update_op/4,
@@ -83,6 +85,16 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
+-spec start_read(coord(), non_neg_integer(), binary()) -> {ok, binary(), tx()}.
+start_read(Coord, Id, Key) ->
+    start_read(Coord, Id, Key, pvc_vclock:new()).
+
+-spec start_read(coord(), non_neg_integer(), binary(), rvc()) -> {ok, binary(), tx()}.
+start_read(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, Key, CVC) ->
+    {ok, Val, SVC, StartNode} = start_read_internal(Key, CVC, Coord),
+    Tx = #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode},
+    {ok, Val, Tx#transaction{rws=pvc_grb_rws:put_ronly_op(StartNode, Key, Tx#transaction.rws)}}.
+
 %% todo(borja): parallel read
 -spec read_op(coord(), tx(), binary()) -> {ok, binary(), tx()}.
 read_op(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key) ->
@@ -126,6 +138,12 @@ start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools})
     Pool = maps:get(N, Pools),
     {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, Id, P, CVC),
     {ok, SVC, Idx}.
+
+start_read_internal(Key, CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}) ->
+    Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    {ok, Snapshot, SVC} = pvc_shackle_transport:start_read(Pool, Id, P, CVC, Key),
+    {ok, Snapshot, SVC, Idx}.
 
 -spec read_op_internal(coord(), binary(), rvc(), pvc_grb_rws:t()) -> {binary(), pvc_grb_rws:t()}.
 read_op_internal(Coord, Key, SVC, RWS) ->
