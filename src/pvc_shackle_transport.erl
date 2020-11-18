@@ -3,9 +3,8 @@
 
 -export([uniform_barrier/4,
          start_transaction/4,
-         start_read/5,
-         get_key_version/5,
-         get_key_version_again/5,
+         get_key_version/6,
+         cast_get_key_version/6,
          prepare_blue/5,
          decide_blue/5]).
 
@@ -28,17 +27,13 @@ uniform_barrier(Pool, Id, Partition, CVC) ->
 start_transaction(Pool, Id, Partition, CVC) ->
     shackle:call(Pool, {start_tx, Id, Partition, CVC}, infinity).
 
--spec start_read(atom(), non_neg_integer(), term(), term(), binary()) -> {ok, binary(), term()}.
-start_read(Pool, Id, Partition, CVC, Key) ->
-    shackle:call(Pool, {start_read, Id, Partition, CVC, Key}, infinity).
+-spec get_key_version(atom(), non_neg_integer(), term(), term(), binary(), boolean()) -> {ok, binary()}.
+get_key_version(Pool, Id, Partition, SVC, Key, ReadAgain) ->
+    shackle:call(Pool, {get_key_vsn, Id, Partition, SVC, Key, ReadAgain}, infinity).
 
--spec get_key_version(atom(), non_neg_integer(), term(), term(), binary) -> {ok, binary()}.
-get_key_version(Pool, Id, Partition, SVC, Key) ->
-    shackle:call(Pool, {get_key_vsn, Id, Partition, SVC, Key}, infinity).
-
--spec get_key_version_again(atom(), non_neg_integer(), term(), term(), binary) -> {ok, binary()}.
-get_key_version_again(Pool, Id, Partition, SVC, Key) ->
-    shackle:call(Pool, {get_key_vsn_again, Id, Partition, SVC, Key}, infinity).
+-spec cast_get_key_version(atom(), non_neg_integer(), term(), term(), binary(), boolean()) -> {ok, shackle:external_request_id()}.
+cast_get_key_version(Pool, Id, Partition, SVC, Key, ReadAgain) ->
+    shackle:cast(Pool, {get_key_vsn, Id, Partition, SVC, Key, ReadAgain}, self(), infinity).
 
 -spec prepare_blue(atom(), non_neg_integer(), term(), term(), [term()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, Id, TxId, SVC, Prepares) ->
@@ -60,14 +55,8 @@ handle_request({uniform_barrier, Id, Partition, CVC}, State=#state{id_len=IdLen}
 handle_request({start_tx, Id, Partition, CVC}, State=#state{id_len=IdLen}) ->
     {ok, Id, <<Id:IdLen, (ppb_grb_driver:start_tx(Partition, CVC))/binary>>, State};
 
-handle_request({start_read, Id, Partition, CVC, Key}, State=#state{id_len=IdLen}) ->
-    {ok, Id, <<Id:IdLen, (ppb_grb_driver:start_read(Partition, CVC, Key))/binary>>, State};
-
-handle_request({get_key_vsn, Id, Partition, SVC, Key}, State=#state{id_len=IdLen}) ->
-    {ok, Id, <<Id:IdLen, (ppb_grb_driver:key_version(Partition, SVC, Key))/binary>>, State};
-
-handle_request({get_key_vsn_again, Id, Partition, SVC, Key}, State=#state{id_len=IdLen}) ->
-    {ok, Id, <<Id:IdLen, (ppb_grb_driver:key_version_again(Partition, SVC, Key))/binary>>, State};
+handle_request({get_key_vsn, Id, Partition, SVC, Key, ReadAgain}, State=#state{id_len=IdLen}) ->
+    {ok, Id, <<Id:IdLen, (ppb_grb_driver:key_version(Partition, SVC, ReadAgain, Key))/binary>>, State};
 
 handle_request({prepare_blue, Id, TxId, SVC, Prepares}, State=#state{id_len=IdLen}) ->
     {ok, Id, <<Id:IdLen, (ppb_grb_driver:prepare_blue_node(TxId, SVC, Prepares))/binary>>, State};

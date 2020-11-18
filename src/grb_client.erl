@@ -6,12 +6,8 @@
          uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
-         start_read/3,
-         start_read/4,
          read_op/3,
-         read_bypass/3,
          update_op/4,
-         update_bypass/4,
          commit/2,
          commit_red/2]).
 
@@ -40,6 +36,7 @@
 
 -type transaction_id() :: {binary(), non_neg_integer(), non_neg_integer()}.
 -type rvc() :: pvc_vclock:vc(replica_id()).
+-type read_partitions() :: #{partition_id() => true}.
 
 -record(transaction, {
     id :: transaction_id(),
@@ -47,7 +44,10 @@
     read_only = true :: boolean(),
     rws = pvc_grb_rws:new() :: pvc_grb_rws:t(),
     %% at which node did we start the transaction?
-    start_node :: index_node()
+    start_node :: index_node(),
+    %% what partitions have we read from?
+    %% can optimize future reads from here
+    read_partitions = #{} :: read_partitions()
 }).
 
 -opaque coord() :: #coordinator{}.
@@ -85,36 +85,33 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
--spec start_read(coord(), non_neg_integer(), binary()) -> {ok, binary(), tx()}.
-start_read(Coord, Id, Key) ->
-    start_read(Coord, Id, Key, pvc_vclock:new()).
-
--spec start_read(coord(), non_neg_integer(), binary(), rvc()) -> {ok, binary(), tx()}.
-start_read(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, Key, CVC) ->
-    {ok, Val, SVC, StartNode} = start_read_internal(Key, CVC, Coord),
-    Tx = #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode},
-    {ok, Val, Tx#transaction{rws=pvc_grb_rws:put_ronly_op(StartNode, Key, Tx#transaction.rws)}}.
-
-%% todo(borja): parallel read
 -spec read_op(coord(), tx(), binary()) -> {ok, binary(), tx()}.
-read_op(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key) ->
-    {Val, NewRWS} = read_op_internal(Coord, Key, SVC, RWS),
-    {ok, Val, Tx#transaction{rws=NewRWS}}.
+read_op(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
+        Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
+        Key) ->
 
-%% todo(borja): parallel read, add when reading partition again
--spec read_bypass(coord(), tx(), binary()) -> {ok, binary(), tx()}.
-read_bypass(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key) ->
-    {Val, NewRWS} = read_bypass_internal(Coord, Key, SVC, RWS),
-    {ok, Val, Tx#transaction{rws=NewRWS}}.
+    Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    {ok, Val} = pvc_shackle_transport:get_key_version(Pool, Id, P, SVC,
+                                                      Key, maps:get(P, ReadP, false)),
 
-%% todo(borja): parallel update
-update_op(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key, Val) ->
-    {NewVal, NewRWS} = update_op_internal(Coord, Key, Val, SVC, RWS),
-    {ok, NewVal, Tx#transaction{rws=NewRWS, read_only=false}}.
+    {ok, Val, Tx#transaction{read_partitions=ReadP#{P => true},
+                             rws=pvc_grb_rws:put_ronly_op(Idx, Key, RWS)}}.
 
-update_bypass(Coord, Tx=#transaction{rws=RWS, vc=SVC}, Key, Val) ->
-    {NewVal, NewRWS} = update_bypass_internal(Coord, Key, Val, SVC, RWS),
-    {ok, NewVal, Tx#transaction{rws=NewRWS, read_only=false}}.
+-spec update_op(coord(), tx(), binary(), binary()) -> {ok, binary(), tx()}.
+update_op(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
+          Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
+          Key,
+          Val) ->
+
+    Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    {ok, _} = pvc_shackle_transport:get_key_version(Pool, Id, P, SVC,
+                                                    Key, maps:get(P, ReadP, false)),
+    %% todo(borja, crdts): Apply given operation to snapshot
+    {ok, Val, Tx#transaction{read_only=false,
+                             read_partitions=ReadP#{P => true},
+                             rws=pvc_grb_rws:put_op(Idx, Key, Val, RWS)}}.
 
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
@@ -138,48 +135,6 @@ start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools})
     Pool = maps:get(N, Pools),
     {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, Id, P, CVC),
     {ok, SVC, Idx}.
-
-start_read_internal(Key, CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}) ->
-    Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-    Pool = maps:get(N, Pools),
-    {ok, Snapshot, SVC} = pvc_shackle_transport:start_read(Pool, Id, P, CVC, Key),
-    {ok, Snapshot, SVC, Idx}.
-
--spec read_op_internal(coord(), binary(), rvc(), pvc_grb_rws:t()) -> {binary(), pvc_grb_rws:t()}.
-read_op_internal(Coord, Key, SVC, RWS) ->
-    {Idx, Snapshot} = send_vsn_request(Coord, Key, SVC),
-    {Snapshot, pvc_grb_rws:put_ronly_op(Idx, Key, RWS)}.
-
--spec read_bypass_internal(coord(), binary(), rvc(), pvc_grb_rws:t()) -> {binary(), pvc_grb_rws:t()}.
-read_bypass_internal(Coord, Key, SVC, RWS) ->
-    {Idx, Snapshot} = send_vsn_request_again(Coord, Key, SVC),
-    {Snapshot, pvc_grb_rws:put_ronly_op(Idx, Key, RWS)}.
-
--spec update_op_internal(coord(), binary(), binary(), rvc(), pvc_grb_rws:t()) -> {binary(), pvc_grb_rws:t()}.
-update_op_internal(Coord, Key, Val, SVC, RWS) ->
-    %% todo(borja, crdts): Apply given operation to snapshot
-    {Idx, _} = send_vsn_request(Coord, Key, SVC),
-    {Val, pvc_grb_rws:put_op(Idx, Key, Val, RWS)}.
-
--spec update_bypass_internal(coord(), binary(), binary(), rvc(), pvc_grb_rws:t()) -> {binary(), pvc_grb_rws:t()}.
-update_bypass_internal(Coord, Key, Val, SVC, RWS) ->
-    %% todo(borja, crdts): Apply given operation to snapshot
-    {Idx, _} = send_vsn_request_again(Coord, Key, SVC),
-    {Val, pvc_grb_rws:put_op(Idx, Key, Val, RWS)}.
-
--spec send_vsn_request(coord(), binary(), rvc()) -> {index_node(), binary()}.
-send_vsn_request(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools}, Key, SVC) ->
-    Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-    Pool = maps:get(N, Pools),
-    {ok, Snapshot} = pvc_shackle_transport:get_key_version(Pool, Id, P, SVC, Key),
-    {Idx, Snapshot}.
-
--spec send_vsn_request_again(coord(), binary(), rvc()) -> {index_node(), binary()}.
-send_vsn_request_again(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools}, Key, SVC) ->
-    Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-    Pool = maps:get(N, Pools),
-    {ok, Snapshot} = pvc_shackle_transport:get_key_version_again(Pool, Id, P, SVC, Key),
-    {Idx, Snapshot}.
 
 -spec commit_internal(coord(), tx()) -> rvc().
 commit_internal(Coord, Tx) ->
