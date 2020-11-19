@@ -6,8 +6,9 @@
          uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
-         read_op/3,
-         update_op/4,
+         read_key_snapshot/3,
+         update_lww/4,
+         update_gset/4,
          commit/2,
          commit_red/2]).
 
@@ -85,33 +86,42 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
--spec read_op(coord(), tx(), binary()) -> {ok, binary(), tx()}.
-read_op(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
-        Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
-        Key) ->
+-spec read_key_snapshot(coord(), tx(), binary()) -> {ok, term(), tx()}.
+read_key_snapshot(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
+                  Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
+                  Key) ->
 
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, Val} = pvc_shackle_transport:get_key_version(Pool, Id, P, SVC,
-                                                      Key, maps:get(P, ReadP, false)),
+    {ok, Snapshot} = pvc_shackle_transport:read_request(Pool, Id, P, SVC,
+                                                        Key, maps:get(P, ReadP, false)),
 
-    {ok, Val, Tx#transaction{read_partitions=ReadP#{P => true},
-                             rws=pvc_grb_rws:put_ronly_op(Idx, Key, RWS)}}.
+    {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
+                                  rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.
 
--spec update_op(coord(), tx(), binary(), binary()) -> {ok, binary(), tx()}.
-update_op(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
-          Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
-          Key,
-          Val) ->
+-spec update_lww(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
+update_lww(Coord, Tx, Key, Val) ->
+    update_operation(Coord, Tx, Key, grb_lww, Val).
 
+-spec update_gset(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
+update_gset(Coord, Tx, Key, Val) ->
+    update_operation(Coord, Tx, Key, grb_gset, Val).
+
+-spec update_operation(coord(), tx(), binary(), module(), term()) -> {ok, term(), tx()}.
+update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
+                 Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
+                 Key,
+                 Mod,
+                 Val) ->
+
+    Operation = Mod:make_op(Val),
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, _} = pvc_shackle_transport:get_key_version(Pool, Id, P, SVC,
-                                                    Key, maps:get(P, ReadP, false)),
-    %% todo(borja, crdts): Apply given operation to snapshot
-    {ok, Val, Tx#transaction{read_only=false,
-                             read_partitions=ReadP#{P => true},
-                             rws=pvc_grb_rws:put_op(Idx, Key, Val, RWS)}}.
+    {ok, Snapshot} = pvc_shackle_transport:update_request(Pool, Id, P, SVC,
+                                                          Key, Operation, maps:get(P, ReadP, false)),
+    {ok, Snapshot, Tx#transaction{read_only=false,
+                                  read_partitions=ReadP#{P => true},
+                                  rws=pvc_grb_rws:add_operation(Idx, Key, Mod, Operation, RWS)}}.
 
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
@@ -145,10 +155,10 @@ commit_internal(Coord, Tx) ->
 -spec prepare_blue(coord(), tx()) -> {#{node_ip() => [partition_id()]}, rvc()}.
 prepare_blue(#coordinator{conn_pool=Pools, coordinator_id=Id, replica_id=ReplicaId}, Tx) ->
     #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
-    {Requests, Nodes} = pvc_grb_rws:fold_updates(
-        fun(Node, Partitions, Prepares, {ReqAcc, NodeAcc}) ->
+    {Requests, Nodes} = pvc_grb_rws:fold_updated_partitions(
+        fun(Node, Partitions, {ReqAcc, NodeAcc}) ->
             Pool = maps:get(Node, Pools),
-            {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, Id, TxId, SVC, Prepares),
+            {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, Id, TxId, SVC, Partitions),
             {
                 [ReqId | ReqAcc],
                 NodeAcc#{Node => Partitions}
