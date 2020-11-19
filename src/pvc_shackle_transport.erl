@@ -3,9 +3,9 @@
 
 -export([uniform_barrier/4,
          start_transaction/4,
-         read_request/6,
-         cast_read_request/6,
-         update_request/7,
+         read_request/7,
+         cast_read_request/7,
+         update_request/8,
          prepare_blue/5,
          decide_blue/5]).
 
@@ -28,17 +28,17 @@ uniform_barrier(Pool, Id, Partition, CVC) ->
 start_transaction(Pool, Id, Partition, CVC) ->
     shackle:call(Pool, {start_tx, Id, Partition, CVC}, infinity).
 
--spec read_request(atom(), non_neg_integer(), term(), term(), binary(), boolean()) -> {ok, term()}.
-read_request(Pool, Id, Partition, SVC, Key, ReadAgain) ->
-    shackle:call(Pool, {read_request, Id, Partition, SVC, Key, ReadAgain}, infinity).
+-spec read_request(atom(), non_neg_integer(), term(), term(), term(), binary(), boolean()) -> {ok, term()}.
+read_request(Pool, Id, Partition, TxId, SVC, Key, ReadAgain) ->
+    shackle:call(Pool, {read_request, Id, Partition, TxId, SVC, Key, ReadAgain}, infinity).
 
--spec cast_read_request(atom(), non_neg_integer(), term(), term(), binary(), boolean()) -> {ok, shackle:external_request_id()}.
-cast_read_request(Pool, Id, Partition, SVC, Key, ReadAgain) ->
-    shackle:cast(Pool, {read_request, Id, Partition, SVC, Key, ReadAgain}, self(), infinity).
+-spec cast_read_request(atom(), non_neg_integer(), term(), term(), term(), binary(), boolean()) -> {ok, shackle:external_request_id()}.
+cast_read_request(Pool, Id, Partition, TxId, SVC, Key, ReadAgain) ->
+    shackle:cast(Pool, {read_request, Id, Partition, TxId, SVC, Key, ReadAgain}, self(), infinity).
 
--spec update_request(atom(), non_neg_integer(), term(), term(), binary(), term(), boolean()) -> {ok, term()}.
-update_request(Pool, Id, Partition, SVC, Key, Operation, ReadAgain) ->
-    shackle:call(Pool, {update_request, Id, Partition, SVC, Key, Operation, ReadAgain}, infinity).
+-spec update_request(atom(), non_neg_integer(), term(), term(), term(), binary(), term(), boolean()) -> {ok, term()}.
+update_request(Pool, Id, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
+    shackle:call(Pool, {update_request, Id, Partition, TxId, SVC, Key, Operation, ReadAgain}, infinity).
 
 -spec prepare_blue(atom(), non_neg_integer(), term(), term(), [non_neg_integer()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, Id, TxId, SVC, Partitions) ->
@@ -60,11 +60,11 @@ handle_request({uniform_barrier, Id, Partition, CVC}, State=#state{id_len=IdLen}
 handle_request({start_tx, Id, Partition, CVC}, State=#state{id_len=IdLen}) ->
     {ok, Id, <<Id:IdLen, (ppb_grb_driver:start_tx(Partition, CVC))/binary>>, State};
 
-handle_request({read_request, Id, Partition, SVC, Key, ReadAgain}, State=#state{id_len=IdLen}) ->
-    {ok, Id, <<Id:IdLen, (ppb_grb_driver:read_request(Partition, SVC, ReadAgain, Key))/binary>>, State};
+handle_request({read_request, Id, Partition, TxId, SVC, Key, ReadAgain}, State=#state{id_len=IdLen}) ->
+    {ok, Id, <<Id:IdLen, (ppb_grb_driver:read_request(Partition, TxId, SVC, ReadAgain, Key))/binary>>, State};
 
-handle_request({update_request, Id, Partition, SVC, Key, Operation, ReadAgain}, State=#state{id_len=IdLen}) ->
-    {ok, Id, <<Id:IdLen, (ppb_grb_driver:update_request(Partition, SVC, ReadAgain, Key, Operation))/binary>>, State};
+handle_request({update_request, Id, Partition, TxId, SVC, Key, Operation, ReadAgain}, State=#state{id_len=IdLen}) ->
+    {ok, Id, <<Id:IdLen, (ppb_grb_driver:update_request(Partition, TxId, SVC, ReadAgain, Key, Operation))/binary>>, State};
 
 handle_request({prepare_blue, Id, TxId, SVC, Partitions}, State=#state{id_len=IdLen}) ->
     {ok, Id, <<Id:IdLen, (ppb_grb_driver:prepare_blue_node(TxId, SVC, Partitions))/binary>>, State};

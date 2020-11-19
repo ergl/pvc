@@ -88,12 +88,12 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
 
 -spec read_key_snapshot(coord(), tx(), binary()) -> {ok, term(), tx()}.
 read_key_snapshot(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
-                  Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
+                  Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP, id=TxId},
                   Key) ->
 
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, Snapshot} = pvc_shackle_transport:read_request(Pool, Id, P, SVC,
+    {ok, Snapshot} = pvc_shackle_transport:read_request(Pool, Id, P, TxId, SVC,
                                                         Key, maps:get(P, ReadP, false)),
 
     {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
@@ -109,7 +109,7 @@ update_gset(Coord, Tx, Key, Val) ->
 
 -spec update_operation(coord(), tx(), binary(), module(), term()) -> {ok, term(), tx()}.
 update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
-                 Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP},
+                 Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP, id=TxId},
                  Key,
                  Mod,
                  Val) ->
@@ -117,7 +117,7 @@ update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
     Operation = Mod:make_op(Val),
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, Snapshot} = pvc_shackle_transport:update_request(Pool, Id, P, SVC,
+    {ok, Snapshot} = pvc_shackle_transport:update_request(Pool, Id, P, TxId, SVC,
                                                           Key, Operation, maps:get(P, ReadP, false)),
     {ok, Snapshot, Tx#transaction{read_only=false,
                                   read_partitions=ReadP#{P => true},
