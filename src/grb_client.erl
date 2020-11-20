@@ -6,7 +6,7 @@
          uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
-         read_key_snapshot/3,
+         read_key_snapshot/4,
          update_lww/4,
          update_gset/4,
          commit/2,
@@ -86,15 +86,15 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
--spec read_key_snapshot(coord(), tx(), binary()) -> {ok, term(), tx()}.
+-spec read_key_snapshot(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
 read_key_snapshot(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
                   Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP, id=TxId},
-                  Key) ->
+                  Key, Type) ->
 
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
     {ok, Snapshot} = pvc_shackle_transport:read_request(Pool, Id, P, TxId, SVC,
-                                                        Key, maps:get(P, ReadP, false)),
+                                                        Key, Type, maps:get(P, ReadP, false)),
 
     {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
                                   rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.

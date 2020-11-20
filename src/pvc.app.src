@@ -1,6 +1,6 @@
 {application, pvc,
     [{description, "PVC client coordinator library"},
-     {vsn, "0.19.2"},
+     {vsn, "0.19.3"},
      {registered, []},
      {applications, [kernel, stdlib, pipesock, shackle]},
      {env,[]},
