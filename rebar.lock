@@ -11,7 +11,7 @@
   0},
  {<<"pvc_types">>,
   {git,"https://github.com/ergl/pvc_types.git",
-       {ref,"6e3e0b7b7332b0708597c21c498f0c8104b9b988"}},
+       {ref,"3715a210d6da379aa78555d86c6824a0b403b273"}},
   0},
  {<<"quickrand">>,
   {git,"https://github.com/okeuday/quickrand.git",

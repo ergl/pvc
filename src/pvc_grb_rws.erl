@@ -3,7 +3,7 @@
 -include("pvc.hrl").
 
 -type rs() :: #{term() => undefined}.
--type ws() :: #{term() => grb_lww:op() | grb_gset:op()}.
+-type ws() :: #{term() => grb_crdt:op()}.
 
 -type inner_set() :: {rs(), ws()}.
 -type partitions_readwriteset() :: #{partition_id() => inner_set()}.
@@ -12,7 +12,7 @@
 
 %% API
 -export([new/0,
-         add_operation/5,
+         add_operation/4,
          add_read_key/3,
          fold_updated_partitions/3,
          make_red_prepares/1]).
@@ -33,8 +33,8 @@ add_read_key({Partition, Node}, Key, Map) ->
         end
     }}.
 
--spec add_operation(index_node(), term(), module(), term(), t()) -> t().
-add_operation({Partition, Node}, Key, Mod, Operation, Map) ->
+-spec add_operation(index_node(), term(), term(), t()) -> t().
+add_operation({Partition, Node}, Key, Operation, Map) ->
     Inner = maps:get(Node, Map, #{}),
     Map#{Node => Inner#{Partition =>
         case maps:get(Partition, Inner, undefined) of
@@ -44,7 +44,7 @@ add_operation({Partition, Node}, Key, Mod, Operation, Map) ->
             {RS, WS = #{Key := PrevOp}} ->
                 {
                     RS#{Key => undefined},
-                    WS#{Key := Mod:merge_ops(PrevOp, Operation)}
+                    WS#{Key := grb_crdt:merge_ops(PrevOp, Operation)}
                 };
 
             {RS, WS} ->

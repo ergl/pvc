@@ -36,12 +36,12 @@
 }).
 
 -type transaction_id() :: {binary(), non_neg_integer(), non_neg_integer()}.
--type rvc() :: pvc_vclock:vc(replica_id()).
+-type rvc() :: grb_vclock:vc(replica_id()).
 -type read_partitions() :: #{partition_id() => true}.
 
 -record(transaction, {
     id :: transaction_id(),
-    vc = pvc_vclock:new() :: rvc(),
+    vc = grb_vclock:new() :: rvc(),
     read_only = true :: boolean(),
     rws = pvc_grb_rws:new() :: pvc_grb_rws:t(),
     %% at which node did we start the transaction?
@@ -114,14 +114,14 @@ update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
                  Mod,
                  Val) ->
 
-    Operation = Mod:make_op(Val),
+    Operation = grb_crdt:make_op(Mod, Val),
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
     {ok, Snapshot} = pvc_shackle_transport:update_request(Pool, Id, P, TxId, SVC,
                                                           Key, Operation, maps:get(P, ReadP, false)),
     {ok, Snapshot, Tx#transaction{read_only=false,
                                   read_partitions=ReadP#{P => true},
-                                  rws=pvc_grb_rws:add_operation(Idx, Key, Mod, Operation, RWS)}}.
+                                  rws=pvc_grb_rws:add_operation(Idx, Key, Operation, RWS)}}.
 
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
