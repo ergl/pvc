@@ -7,3 +7,14 @@
 
 -define(ANTIDOTE_BUCKET, <<"antidote">>).
 -define(GRB_BUCKET, <<"grb">>).
+
+%% TCP options for bootstrap info
+-define(UTIL_CONN_OPTS, [binary,
+                         {active, false},
+                         {packet, 4},
+                         {nodelay, true}]).
+
+-define(RED_CONN_OPTS, [binary,
+                       {active, once},
+                       {packet, 4},
+                       {nodelay, true}]).

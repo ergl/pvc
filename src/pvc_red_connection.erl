@@ -4,7 +4,7 @@
 
 -export([start_connection/3]).
 
--export([commit_red/6]).
+-export([commit_red/7]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -12,11 +12,6 @@
          handle_cast/2,
          handle_info/2,
          terminate/2]).
-
--define(CONN_OPTIONS, [binary,
-                       {active, once},
-                       {packet, 4},
-                       {nodelay, true}]).
 
 -record(state, {
     socket :: gen_tcp:socket(),
@@ -51,10 +46,17 @@ make_handler(Pid, IdLen) ->
     Handler = #handler{conn_pid=Pid, socket=Socket, msg_owners=Owners, id_len=IdLen},
     {ok, Handler}.
 
--spec commit_red(t(), non_neg_integer(), partition_id(), term(), #{replica_id() => non_neg_integer()}, [{partition_id(), [], #{}}]) -> ok.
-commit_red(Handler, Id, Partition, TxId, SVC, Prepares) ->
+-spec commit_red(Handler :: t(),
+                 Id :: non_neg_integer(),
+                 Partition :: partition_id(),
+                 TxId :: term(),
+                 Label :: binary(),
+                 SVC :: #{replica_id() => non_neg_integer()},
+                 Prepares :: [{partition_id(), [], #{}}]) -> ok.
+
+commit_red(Handler, Id, Partition, TxId, Label, SVC, Prepares) ->
     #handler{socket=Socket, msg_owners=Owners, id_len=IdLen} = Handler,
-    Msg = <<Id:IdLen, (ppb_grb_driver:commit_red(Partition, TxId, SVC, Prepares))/binary>>,
+    Msg = <<Id:IdLen, (ppb_grb_driver:commit_red(Partition, TxId, Label, SVC, Prepares))/binary>>,
     true = ets:insert_new(Owners, {Id, self()}),
     ok = gen_tcp:send(Socket, Msg),
     receive
@@ -66,7 +68,7 @@ commit_red(Handler, Id, Partition, TxId, SVC, Prepares) ->
 %%%===================================================================
 
 init([IP, Port, IdLen]) ->
-    case gen_tcp:connect(IP, Port, ?CONN_OPTIONS) of
+    case gen_tcp:connect(IP, Port, ?RED_CONN_OPTS) of
         {error, Reason} ->
             {stop, Reason};
         {ok, Socket} ->

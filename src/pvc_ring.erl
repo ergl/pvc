@@ -10,12 +10,6 @@
          get_key_indexnode/2,
          get_key_indexnode/3]).
 
-%% TCP options for bootstrap info
--define(CONN_OPTIONS, [binary,
-                       {active, false},
-                       {packet, 4},
-                       {nodelay, true}]).
-
 
 %% @doc Raw ring structure returned from antidote
 %%
@@ -45,7 +39,7 @@
                                                   | socket_error().
 
 partition_info(Address, Port) ->
-    case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
+    case gen_tcp:connect(Address, Port, ?UTIL_CONN_OPTS) of
         {error, Reason} ->
             {error, Reason};
         {ok, Sock} ->
@@ -87,7 +81,7 @@ grb_replica_info(Address, Port) ->
                                                         | socket_error().
 
 grb_replica_info(Address, Port, LenBits) ->
-    case gen_tcp:connect(Address, Port, ?CONN_OPTIONS) of
+    case gen_tcp:connect(Address, Port, ?UTIL_CONN_OPTS) of
         {error, Reason} ->
             {error, Reason};
         {ok, Sock} ->

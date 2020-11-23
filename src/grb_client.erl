@@ -1,16 +1,22 @@
 -module(grb_client).
 -include("pvc.hrl").
 
-%% API
--export([new/6,
-         uniform_barrier/2,
+%% Util API
+-export([put_conflict_information/4]).
+
+%% Create coordinator
+-export([new/3,
+         new/6]).
+
+%% Transactional API
+-export([uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
          read_key_snapshot/4,
          update_lww/4,
          update_gset/4,
          commit/2,
-         commit_red/2]).
+         commit_red/3]).
 
 -type conn_pool() :: atom().
 
@@ -56,6 +62,25 @@
 
 -export_type([conn_pool/0, coord/0, tx/0]).
 
+-spec new(inet:ip_address(), inet:port_number(), non_neg_integer()) -> {ok, coord()}.
+new(BootstrapIp, Port, CoordId) ->
+    {ok, LocalIp, ReplicaId, Ring, Nodes} = pvc_ring:grb_replica_info(BootstrapIp, Port),
+    {Pools, RedConns} = lists:foldl(fun(NodeIp, {ConAcc, RedAcc}) ->
+        PoolName = list_to_atom(atom_to_list(NodeIp) ++ "_shackle_pool"),
+        shackle_pool:start(PoolName, pvc_shackle_transport,
+                           [{address, NodeIp}, {port, Port}, {reconnect, false},
+                            {socket_options, [{packet, 4}, binary, {nodelay, true}]},
+                            {init_options, #{id_len => 16}}],
+                           [{pool_size, 16}]),
+
+        {ok, H} = pvc_red_connection:start_connection(NodeIp, Port, 16),
+        {
+            ConAcc#{NodeIp => PoolName},
+            RedAcc#{NodeIp => H}
+        }
+    end, {#{}, #{}}, Nodes),
+    new(ReplicaId, LocalIp, CoordId, Ring, Pools, RedConns).
+
 -spec new(ReplicaId :: term(),
           LocalIP :: inet:ip_address(),
           CoordId :: non_neg_integer(),
@@ -70,6 +95,28 @@ new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool, RedConnections) ->
                       conn_pool=NodePool,
                       red_connections=RedConnections,
                       coordinator_id=CoordId}}.
+
+-spec put_conflict_information(Address :: node_ip(),
+                               Port :: inet:port_number(),
+                               LenBits :: non_neg_integer(),
+                               Concflicts :: #{binary() := binary()}) -> ok | socket_error().
+
+put_conflict_information(Address, Port, LenBits, Conflicts) ->
+    case gen_tcp:connect(Address, Port, ?UTIL_CONN_OPTS) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, Sock} ->
+            ok = gen_tcp:send(Sock, <<0:LenBits, (ppb_grb_driver:put_conflicts(Conflicts))/binary>>),
+            Reply = case gen_tcp:recv(Sock, 0) of
+                {error, Reason} ->
+                    {error, Reason};
+                {ok, <<0:LenBits, RawReply/binary>>} ->
+                    ok = pvc_proto:decode_serv_reply(RawReply),
+                    ok
+            end,
+            ok = gen_tcp:close(Sock),
+            Reply
+    end.
 
 -spec uniform_barrier(coord(), rvc()) -> ok.
 uniform_barrier(#coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}, CVC) ->
@@ -127,13 +174,13 @@ update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
 commit(Coord, Tx) -> commit_internal(Coord, Tx).
 
--spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
-commit_red(Coord, Tx) ->
+-spec commit_red(coord(), tx(), binary()) -> {ok, rvc()} | {abort, term()}.
+commit_red(Coord, Tx, Label) ->
     #coordinator{red_connections=RedConns, coordinator_id=Id} = Coord,
     #transaction{rws=RWS, id=TxId, vc=SVC, start_node={Partition, CoordNode}} = Tx,
     ConnHandle = maps:get(CoordNode, RedConns),
     Prepares = pvc_grb_rws:make_red_prepares(RWS),
-    pvc_red_connection:commit_red(ConnHandle, Id, Partition, TxId, SVC, Prepares).
+    pvc_red_connection:commit_red(ConnHandle, Id, Partition, TxId, Label, SVC, Prepares).
 
 %%====================================================================
 %% Read Internal functions
