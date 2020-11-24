@@ -16,6 +16,7 @@
          update_lww/4,
          update_gset/4,
          commit/2,
+         commit_red/2,
          commit_red/3]).
 
 -type conn_pool() :: atom().
@@ -173,6 +174,10 @@ update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
 commit(Coord, Tx) -> commit_internal(Coord, Tx).
+
+-spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
+commit_red(Coord, Tx) ->
+    commit_red(Coord, Tx, <<"default">>).
 
 -spec commit_red(coord(), tx(), binary()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx, Label) ->
