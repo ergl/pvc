@@ -15,6 +15,9 @@
          read_key_snapshot/4,
          update_lww/4,
          update_gset/4,
+         update_gcounter/4,
+         update_maxtuple/4,
+         update_operation/5,
          commit/2,
          commit_red/2,
          commit_red/3]).
@@ -154,6 +157,14 @@ update_lww(Coord, Tx, Key, Val) ->
 -spec update_gset(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
 update_gset(Coord, Tx, Key, Val) ->
     update_operation(Coord, Tx, Key, grb_gset, Val).
+
+-spec update_gcounter(coord(), tx(), binary(), non_neg_integer()) -> {ok, non_neg_integer(), tx()}.
+update_gcounter(Coord, Tx, Key, Incr) ->
+    update_operation(Coord, Tx, Key, grb_gcounter, Incr).
+
+-spec update_maxtuple(coord(), tx(), binary(), {non_neg_integer(), term()}) -> {ok, {non_neg_integer(), term()}, tx()}.
+update_maxtuple(Coord, Tx, Key, {S, Val}) ->
+    update_operation(Coord, Tx, Key, grb_maxtuple, {S, Val}).
 
 -spec update_operation(coord(), tx(), binary(), module(), term()) -> {ok, term(), tx()}.
 update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
