@@ -132,7 +132,7 @@ uniform_barrier(#coordinator{ring=Ring, conn_pool=Pools}, CVC) ->
 
 -spec start_transaction(coord(), non_neg_integer()) -> {ok, tx()}.
 start_transaction(Coord, Id) ->
-    start_transaction(Coord, Id, pvc_vclock:new()).
+    start_transaction(Coord, Id, grb_vclock:new()).
 
 -spec start_transaction(coord(), non_neg_integer(), rvc()) -> {ok, tx()}.
 start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CVC) ->
@@ -299,8 +299,8 @@ collect([ReqId | Rest], ReplicaId, CVC) ->
 -spec update_vote([{ok, partition_id(), non_neg_integer()}, ...], replica_id(), rvc()) -> rvc().
 update_vote(Votes, ReplicaId, CVC) ->
     lists:foldl(fun({ok, _, PT}, Acc) ->
-        pvc_vclock:set_time(ReplicaId,
-                            erlang:max(PT, pvc_vclock:get_time(ReplicaId, Acc)),
+        grb_vclock:set_time(ReplicaId,
+                            erlang:max(PT, grb_vclock:get_time(ReplicaId, Acc)),
                             Acc)
     end, CVC, Votes).
 
