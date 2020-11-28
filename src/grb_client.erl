@@ -123,10 +123,10 @@ put_conflict_information(Address, Port, LenBits, Conflicts) ->
     end.
 
 -spec uniform_barrier(coord(), rvc()) -> ok.
-uniform_barrier(#coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}, CVC) ->
+uniform_barrier(#coordinator{ring=Ring, conn_pool=Pools}, CVC) ->
     {Partition, Node} = pvc_ring:random_indexnode(Ring),
     Pool = maps:get(Node, Pools),
-    ok = pvc_shackle_transport:uniform_barrier(Pool, Id, Partition, CVC).
+    ok = pvc_shackle_transport:uniform_barrier(Pool, Partition, CVC).
 
 -spec start_transaction(coord(), non_neg_integer()) -> {ok, tx()}.
 start_transaction(Coord, Id) ->
@@ -138,13 +138,13 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
 -spec read_key_snapshot(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
-read_key_snapshot(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
+read_key_snapshot(#coordinator{ring=Ring, conn_pool=Pools},
                   Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP, id=TxId},
                   Key, Type) ->
 
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, Snapshot} = pvc_shackle_transport:read_request(Pool, Id, P, TxId, SVC,
+    {ok, Snapshot} = pvc_shackle_transport:read_request(Pool, P, TxId, SVC,
                                                         Key, Type, maps:get(P, ReadP, false)),
 
     {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
@@ -167,7 +167,7 @@ update_maxtuple(Coord, Tx, Key, {S, Val}) ->
     update_operation(Coord, Tx, Key, grb_maxtuple, {S, Val}).
 
 -spec update_operation(coord(), tx(), binary(), module(), term()) -> {ok, term(), tx()}.
-update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
+update_operation(#coordinator{ring=Ring, conn_pool=Pools},
                  Tx=#transaction{rws=RWS, vc=SVC, read_partitions=ReadP, id=TxId},
                  Key,
                  Mod,
@@ -176,7 +176,7 @@ update_operation(#coordinator{ring=Ring, coordinator_id=Id, conn_pool=Pools},
     Operation = grb_crdt:make_op(Mod, Val),
     Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
-    {ok, Snapshot} = pvc_shackle_transport:update_request(Pool, Id, P, TxId, SVC,
+    {ok, Snapshot} = pvc_shackle_transport:update_request(Pool, P, TxId, SVC,
                                                           Key, Operation, maps:get(P, ReadP, false)),
     {ok, Snapshot, Tx#transaction{read_only=false,
                                   read_partitions=ReadP#{P => true},
@@ -203,10 +203,10 @@ commit_red(Coord, Tx, Label) ->
 %%====================================================================
 
 -spec start_internal(rvc(), coord()) -> {ok, rvc(), index_node()}.
-start_internal(CVC, #coordinator{coordinator_id=Id, ring=Ring, conn_pool=Pools}) ->
+start_internal(CVC, #coordinator{ring=Ring, conn_pool=Pools}) ->
     Idx={P, N} = pvc_ring:random_indexnode(Ring),
     Pool = maps:get(N, Pools),
-    {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, Id, P, CVC),
+    {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, P, CVC),
     {ok, SVC, Idx}.
 
 -spec commit_internal(coord(), tx()) -> rvc().
@@ -216,12 +216,12 @@ commit_internal(Coord, Tx) ->
     CVC.
 
 -spec prepare_blue(coord(), tx()) -> {#{node_ip() => [partition_id()]}, rvc()}.
-prepare_blue(#coordinator{conn_pool=Pools, coordinator_id=Id, replica_id=ReplicaId}, Tx) ->
+prepare_blue(#coordinator{conn_pool=Pools, replica_id=ReplicaId}, Tx) ->
     #transaction{rws=RWS, id=TxId, vc=SVC} = Tx,
     {Requests, Nodes} = pvc_grb_rws:fold_updated_partitions(
         fun(Node, Partitions, {ReqAcc, NodeAcc}) ->
             Pool = maps:get(Node, Pools),
-            {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, Id, TxId, SVC, Partitions),
+            {ok, ReqId} = pvc_shackle_transport:prepare_blue(Pool, TxId, SVC, Partitions),
             {
                 [ReqId | ReqAcc],
                 NodeAcc#{Node => Partitions}
@@ -231,13 +231,13 @@ prepare_blue(#coordinator{conn_pool=Pools, coordinator_id=Id, replica_id=Replica
         RWS
     ),
 
-    {Nodes, collect(Requests, Id, ReplicaId, SVC)}.
+    {Nodes, collect(Requests, ReplicaId, SVC)}.
 
--spec collect([inet:socket()], non_neg_integer(), term(), rvc()) -> rvc().
-collect([], _, _, CVC) -> CVC;
-collect([ReqId | Rest], Id, ReplicaId, CVC) ->
+-spec collect([inet:socket()], term(), rvc()) -> rvc().
+collect([], _, CVC) -> CVC;
+collect([ReqId | Rest], ReplicaId, CVC) ->
     Votes = shackle:receive_response(ReqId),
-    collect(Rest, Id, ReplicaId, update_vote(Votes, ReplicaId, CVC)).
+    collect(Rest, ReplicaId, update_vote(Votes, ReplicaId, CVC)).
 
 -spec update_vote([{ok, partition_id(), non_neg_integer()}, ...], replica_id(), rvc()) -> rvc().
 update_vote(Votes, ReplicaId, CVC) ->
@@ -248,8 +248,8 @@ update_vote(Votes, ReplicaId, CVC) ->
     end, CVC, Votes).
 
 -spec decide_blue(transaction_id(), rvc(), #{node_ip() => [partition_id()]}, coord()) -> ok.
-decide_blue(TxId, CVC, Nodes, #coordinator{conn_pool=Pools, coordinator_id=Id}) ->
+decide_blue(TxId, CVC, Nodes, #coordinator{conn_pool=Pools}) ->
     maps:fold(fun(Node, Partitions, ok) ->
         Pool = maps:get(Node, Pools),
-        pvc_shackle_transport:decide_blue(Pool, Id, TxId, Partitions, CVC)
+        pvc_shackle_transport:decide_blue(Pool, TxId, Partitions, CVC)
     end, ok, Nodes).
