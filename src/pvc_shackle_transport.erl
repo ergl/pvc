@@ -6,6 +6,7 @@
          read_request/7,
          cast_read_request/7,
          update_request/7,
+         cast_update_request/7,
          prepare_blue/4,
          decide_blue/4]).
 
@@ -43,6 +44,10 @@ cast_read_request(Pool, Partition, TxId, SVC, Key, Type, ReadAgain) ->
 -spec update_request(atom(), term(), term(), term(), binary(), term(), boolean()) -> {ok, term()}.
 update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
     shackle:call(Pool, {update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, infinity).
+
+-spec cast_update_request(atom(), term(), term(), term(), binary(), term(), boolean()) -> {ok, shackle:external_request_id()}.
+cast_update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
+    shackle:cast(Pool, {update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, self(), infinity).
 
 -spec prepare_blue(atom(), term(), term(), [non_neg_integer()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, TxId, SVC, Partitions) ->
