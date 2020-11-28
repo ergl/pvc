@@ -7,6 +7,8 @@
          cast_read_request/7,
          update_request/7,
          cast_update_request/7,
+         cast_partition_read_request/6,
+         cast_partition_update_request/6,
          prepare_blue/4,
          decide_blue/4]).
 
@@ -49,6 +51,14 @@ update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
 cast_update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
     shackle:cast(Pool, {update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, self(), infinity).
 
+-spec cast_partition_read_request(atom(), non_neg_integer(), term(), term(), boolean(), [{term(), term()}]) -> {ok, shackle:external_request_id()}.
+cast_partition_read_request(Pool, Partition, TxId, SVC, ReadAgain, KeyTypes) ->
+    shackle:cast(Pool, {read_partition, Partition, TxId, SVC, ReadAgain, KeyTypes}, self(), infinity).
+
+-spec cast_partition_update_request(atom(), non_neg_integer(), term(), term(), boolean(), [{term(), term()}]) -> {ok, shackle:external_request_id()}.
+cast_partition_update_request(Pool, Partition, TxId, SVC, ReadAgain, KeyOps) ->
+    shackle:cast(Pool, {update_partition, Partition, TxId, SVC, ReadAgain, KeyOps}, self(), infinity).
+
 -spec prepare_blue(atom(), term(), term(), [non_neg_integer()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, TxId, SVC, Partitions) ->
     shackle:cast(Pool, {prepare_blue, TxId, SVC, Partitions}, self(), infinity).
@@ -78,6 +88,12 @@ handle_request({read_request, Partition, TxId, SVC, Key, Type, ReadAgain}, S=#st
 
 handle_request({update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, S=#state{req_counter=Req, id_len=Len}) ->
     {ok, Req, <<Req:Len, (ppb_grb_driver:update_request(Partition, TxId, SVC, ReadAgain, Key, Operation))/binary>>, incr_req(S)};
+
+handle_request({read_partition, Partition, TxId, SVC, ReadAgain, KeyTypes}, S=#state{req_counter=Req, id_len=Len}) ->
+    {ok, Req, <<Req:Len, (ppb_grb_driver:read_request_partition(Partition, TxId, SVC, ReadAgain, KeyTypes))/binary>>, incr_req(S)};
+
+handle_request({update_partition, Partition, TxId, SVC, ReadAgain, KeyOps}, S=#state{req_counter=Req, id_len=Len}) ->
+    {ok, Req, <<Req:Len, (ppb_grb_driver:update_request_partition(Partition, TxId, SVC, ReadAgain, KeyOps))/binary>>, incr_req(S)};
 
 handle_request({prepare_blue, TxId, SVC, Partitions}, S=#state{req_counter=Req, id_len=Len}) ->
     {ok, Req, <<Req:Len, (ppb_grb_driver:prepare_blue_node(TxId, SVC, Partitions))/binary>>, incr_req(S)};
