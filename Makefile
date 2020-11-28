@@ -12,6 +12,9 @@ all: compile
 compile:
 	$(REBAR) compile
 
+debug_bin:
+	$(REBAR) as debug_bin compile
+
 clean: packageclean
 	$(REBAR) clean
 
