@@ -12,21 +12,37 @@
 -export([uniform_barrier/2,
          start_transaction/2,
          start_transaction/3,
-         read_key_snapshot/4,
-         read_key_snapshots/3,
-         read_key_snapshots_grouped/3,
-         update_lww/4,
-         update_gset/4,
-         update_gcounter/4,
-         update_maxtuple/4,
-         update_operation/5,
-         update_operations/3,
-         update_operations_grouped/3,
          commit/2,
          commit_red/2,
          commit_red/3]).
 
+%% Sync read API
+-export([read_key_snapshot/4]).
+
+%% Sync update API
+-export([update_lww/4,
+         update_gset/4,
+         update_gcounter/4,
+         update_maxtuple/4,
+         update_operation/5]).
+
+%% Async read API
+-export([send_read_key/4,
+         receive_read_key/4,
+         send_read_partition/3,
+         receive_read_partition/3]).
+
+%% Async update API
+-export([send_key_update/5,
+         receive_read_update/4,
+         update_operations_grouped/3]).
+
 -type conn_pool() :: atom().
+
+-type read_req_id() :: {read, ReqId :: shackle:external_request_id(), Idx :: index_node()}.
+-type update_req_id() :: {update, ReqId :: shackle:external_request_id(), Op :: term(), Idx :: index_node()}.
+
+-type read_grouped_req_id() :: {read_grouped, ReqId :: shackle:external_request_id(), Idx :: index_node()}.
 
 -record(coordinator, {
     %% The IP we're using to talk to the server
@@ -68,7 +84,12 @@
 -opaque coord() :: #coordinator{}.
 -opaque tx() :: #transaction{}.
 
--export_type([conn_pool/0, coord/0, tx/0]).
+-export_type([conn_pool/0,
+              coord/0,
+              tx/0,
+              read_req_id/0,
+              update_req_id/0,
+              read_grouped_req_id/0]).
 
 -spec new(inet:ip_address(), inet:port_number(), non_neg_integer()) -> {ok, coord()}.
 new(BootstrapIp, Port, CoordId) ->
@@ -154,70 +175,46 @@ read_key_snapshot(#coordinator{ring=Ring, conn_pool=Pools},
     {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
                                   rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.
 
--spec read_key_snapshots(coord(), tx(), [{binary(), term()}]) -> {ok, #{binary() := term()}, tx()}.
-read_key_snapshots(#coordinator{ring=Ring, conn_pool=Pools},
-                   Tx0=#transaction{vc=SVC, read_partitions=ReadP, id=TxId},
-                   KeyTypes) ->
+-spec send_read_key(coord(), tx(), binary(), term()) -> {ok, read_req_id()}.
+send_read_key(#coordinator{ring=Ring, conn_pool=Pools},
+              #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
+              Key,
+              Type) ->
 
-    Requests = lists:foldl(fun({Key, Type}, Acc) ->
-        Idx={P,N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-        Pool = maps:get(N, Pools),
-        {ok, ReqId} = pvc_shackle_transport:cast_read_request(Pool, P, TxId, SVC,
-                                                              Key, Type, maps:get(P, ReadP, false)),
-        [{ReqId, Key, Idx} | Acc]
-    end, [], KeyTypes),
+    Idx={P,N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    {ok, ReqId} = pvc_shackle_transport:cast_read_request(Pool, P, TxId, SVC,
+                                                          Key, Type, maps:get(P, ReadP, false)),
+    {ok, {read, ReqId, Idx}}.
 
-    {Responses, Tx} = lists:foldl(fun({ReqId, Key, Idx={P, _}},
-                                      {Results, TxAcc=#transaction{rws=RWS, read_partitions=ReadPAcc}}) ->
+-spec receive_read_key(coord(), tx(), binary(), read_req_id()) -> {ok, term(), tx()}.
+receive_read_key(_Coord,
+                 Tx=#transaction{read_partitions=ReadP, rws=RWS},
+                 Key,
+                 {read, ReqId, Idx={P, _}}) ->
+    {ok, Snapshot} = shackle:receive_response(ReqId),
+    {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
+                                  rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.
 
-        {ok, Snapshot} = shackle:receive_response(ReqId),
-        {
-            Results#{Key => Snapshot},
-            TxAcc#transaction{read_partitions=ReadPAcc#{P => true},
-                          rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}
-        }
+-spec send_read_partition(coord(), tx(), [{binary(), term()}]) -> {ok, read_grouped_req_id()}.
+send_read_partition(#coordinator{ring=Ring, conn_pool=Pools},
+                               #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
+                               [{FKey, _}]=KeyTypes) ->
 
-    end, {#{}, Tx0}, Requests),
+    Idx={P,N} = pvc_ring:get_key_indexnode(Ring, FKey, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    ReadAgain = maps:get(P, ReadP, false),
+    {ok, ReqId} = pvc_shackle_transport:cast_partition_read_request(Pool, P, TxId, SVC, ReadAgain, KeyTypes),
+    {ok, {read_grouped, ReqId, Idx}}.
 
-    {ok, Responses, Tx}.
+-spec receive_read_partition(coord(), tx(), read_grouped_req_id()) -> {ok, #{binary() := term()}, tx()}.
+receive_read_partition(_Coord, Tx0, {read_grouped, ReqId, Idx}) ->
 
--spec read_key_snapshots_grouped(coord(), tx(), [{binary(), term()}]) -> {ok, #{binary() := term()}, tx()}.
-read_key_snapshots_grouped(#coordinator{ring=Ring, conn_pool=Pools},
-                           Tx0=#transaction{vc=SVC, read_partitions=ReadP, id=TxId},
-                           KeyTypes) ->
+    {ok, Responses} = shackle:receive_response(ReqId),
 
-    GroupedKeyTypes = lists:foldl(fun({Key, _}=Elt, Acc) ->
-        Idx={P, N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-        case Acc of
-            #{Idx := {Pool, ReadAgain, Keys}} ->
-                Acc#{Idx => {Pool, ReadAgain, [Elt | Keys]}};
-            _ ->
-                Pool = maps:get(N, Pools),
-                ReadAgain = maps:get(P, ReadP, false),
-                Acc#{Idx => {Pool, ReadAgain, [Elt]}}
-        end
-    end, #{}, KeyTypes),
-
-    Requests = maps:fold(fun(Idx={P, _}, {Pool, ReadAgain, Payload}, Acc) ->
-        {ok, ReqId} = pvc_shackle_transport:cast_partition_read_request(Pool, P, TxId,
-                                                                        SVC, ReadAgain, Payload),
-        [ {ReqId, Idx} | Acc]
-    end, [], GroupedKeyTypes),
-
-    {Responses, Tx} = lists:foldl(fun({ReqId, Idx={P, _}},
-                                      {Results0, TxAcc0=#transaction{read_partitions=ReadP0}}) ->
-
-        {ok, Response} = shackle:receive_response(ReqId),
-
-        {Results, TxAcc} = lists:foldl(fun({Key, Snapshot}, {Results, TxAcc=#transaction{rws=RWS}}) ->
-            {
-                Results#{Key => Snapshot},
-                TxAcc#transaction{rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}
-            }
-        end, {Results0, TxAcc0}, Response),
-
-        {Results, TxAcc#transaction{read_partitions=ReadP0#{P => true}}}
-    end, {#{}, Tx0}, Requests),
+    Tx = maps:fold(fun(Key, _, TxAcc=#transaction{rws=RWS}) ->
+        TxAcc#transaction{rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}
+    end, Tx0, Responses),
 
     {ok, Responses, Tx}.
 
@@ -253,33 +250,30 @@ update_operation(#coordinator{ring=Ring, conn_pool=Pools},
                                   read_partitions=ReadP#{P => true},
                                   rws=pvc_grb_rws:add_operation(Idx, Key, Operation, RWS)}}.
 
--spec update_operations(coord(), tx(), [{binary(), module(), term()}]) -> {ok, #{binary() := term()}, tx()}.
-update_operations(#coordinator{ring=Ring, conn_pool=Pools},
-                  Tx0=#transaction{vc=SVC, read_partitions=ReadP, id=TxId},
-                  KeyOps) ->
+-spec send_key_update(coord(), tx(), binary(), module(), term()) -> {ok, update_req_id()}.
+send_key_update(#coordinator{ring=Ring, conn_pool=Pools},
+                #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
+                Key,
+                Module,
+                Value) ->
 
-    Requests = lists:foldl(fun({Key, Mod, Val}, Acc) ->
-        Op = grb_crdt:make_op(Mod, Val),
-        Idx={P,N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
-        Pool = maps:get(N, Pools),
-        {ok, ReqId} = pvc_shackle_transport:cast_update_request(Pool, P, TxId, SVC,
-                                                                Key, Op, maps:get(P, ReadP, false)),
-        [{ReqId, Key, Op, Idx} | Acc]
-    end, [], KeyOps),
+    Op = grb_crdt:make_op(Module, Value),
+    Idx={P,N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    {ok, ReqId} = pvc_shackle_transport:cast_update_request(Pool, P, TxId, SVC,
+                                                            Key, Op, maps:get(P, ReadP, false)),
+    {ok, {update, ReqId, Op, Idx}}.
 
-    {Responses, Tx} = lists:foldl(fun({ReqId, Key, Op, Idx={P, _}},
-                                      {Results, TxAcc=#transaction{rws=RWS, read_partitions=ReadPAcc}}) ->
+-spec receive_read_update(coord(), tx(), binary(), update_req_id()) -> {ok, term(), tx()}.
+receive_read_update(_Coord,
+                    Tx=#transaction{read_partitions=ReadP, rws=RWS},
+                    Key,
+                    {update, ReqId, Op, Idx={P, _}}) ->
 
-        {ok, Snapshot} = shackle:receive_response(ReqId),
-        {
-            Results#{Key => Snapshot},
-            TxAcc#transaction{read_partitions=ReadPAcc#{P => true},
-                              rws=pvc_grb_rws:add_operation(Idx, Key, Op, RWS)}
-        }
-
-    end, {#{}, Tx0}, Requests),
-
-    {ok, Responses, Tx#transaction{read_only=false}}.
+    {ok, Snapshot} = shackle:receive_response(ReqId),
+    {ok, Snapshot, Tx#transaction{read_only=false,
+                                 read_partitions=ReadP#{P => true},
+                                 rws=pvc_grb_rws:add_operation(Idx, Key, Op, RWS)}}.
 
 -spec update_operations_grouped(coord(), tx(), [{binary(), module(), term()}]) -> {ok, #{binary() := term()}, tx()}.
 update_operations_grouped(#coordinator{ring=Ring, conn_pool=Pools},
