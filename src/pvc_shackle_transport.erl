@@ -12,6 +12,9 @@
          prepare_blue/4,
          decide_blue/4]).
 
+%% Simple update API
+-export([cast_update_send/5]).
+
 %% API
 -export([init/1,
          setup/2,
@@ -59,6 +62,10 @@ cast_partition_read_request(Pool, Partition, TxId, SVC, ReadAgain, KeyTypes) ->
 cast_partition_update_request(Pool, Partition, TxId, SVC, ReadAgain, KeyOps) ->
     shackle:cast(Pool, {update_partition, Partition, TxId, SVC, ReadAgain, KeyOps}, self(), infinity).
 
+-spec cast_update_send(atom(), non_neg_integer(), term(), term(), term()) -> {ok, shackle:external_request_id()}.
+cast_update_send(Pool, Partition, TxId, Key, Operation) ->
+    shackle:cast(Pool, {update_send, Partition, TxId, Key, Operation}, self(), infinity).
+
 -spec prepare_blue(atom(), term(), term(), [non_neg_integer()]) -> {ok, shackle:external_request_id()}.
 prepare_blue(Pool, TxId, SVC, Partitions) ->
     shackle:cast(Pool, {prepare_blue, TxId, SVC, Partitions}, self(), infinity).
@@ -94,6 +101,9 @@ handle_request({read_partition, Partition, TxId, SVC, ReadAgain, KeyTypes}, S=#s
 
 handle_request({update_partition, Partition, TxId, SVC, ReadAgain, KeyOps}, S=#state{req_counter=Req, id_len=Len}) ->
     {ok, Req, <<Req:Len, (ppb_grb_driver:update_request_partition(Partition, TxId, SVC, ReadAgain, KeyOps))/binary>>, incr_req(S)};
+
+handle_request({update_send, Partition, TxId, Key, Operation}, S=#state{req_counter=Req, id_len=Len}) ->
+    {ok, Req, <<Req:Len, (ppb_grb_driver:op_send(Partition, TxId, Key, Operation))/binary>>, incr_req(S)};
 
 handle_request({prepare_blue, TxId, SVC, Partitions}, S=#state{req_counter=Req, id_len=Len}) ->
     {ok, Req, <<Req:Len, (ppb_grb_driver:prepare_blue_node(TxId, SVC, Partitions))/binary>>, incr_req(S)};
