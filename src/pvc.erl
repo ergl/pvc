@@ -294,7 +294,7 @@ read_internal(Key, State=#coord_state{connections=Conns,
 
 %% Remote read for Read Committed
 remote_read(MsgId, {Partition, _}, Connection, Key, Tx=#tx_state{protocol_state=#rc_state{}}) ->
-    ReadRequest = ppb_protocol_driver:read_rc(Partition, Key),
+    ReadRequest = ppb_fastpsi_driver:read_rc(Partition, Key),
     {ok, RawReply} = pvc_connection:send(Connection, MsgId, ReadRequest),
     {ok, Value} = pvc_proto:decode_serv_reply(RawReply),
 
@@ -302,7 +302,7 @@ remote_read(MsgId, {Partition, _}, Connection, Key, Tx=#tx_state{protocol_state=
     {ok, Value, Tx};
 
 remote_read(MsgId, {Partition, _}=IndexNode, Connection, Key, Tx) ->
-    ReadRequest = ppb_protocol_driver:read_request(Partition,
+    ReadRequest = ppb_fastpsi_driver:read_request(Partition,
                                                    Key,
                                                    Tx#tx_state.vc_aggr,
                                                    Tx#tx_state.read_partitions),
@@ -434,7 +434,7 @@ send_prepares(Connections, MsgId, #tx_state{id=TxId,
     ForEach = fun(Protocol, Node, Partitions) ->
         Connection = orddict:fetch(Node, Connections),
         Prepares = build_prepares(CommitVC, Partitions),
-        PrepareMsg = ppb_protocol_driver:prepare_node(TxId, Protocol, Prepares),
+        PrepareMsg = ppb_fastpsi_driver:prepare_node(TxId, Protocol, Prepares),
         pvc_connection:send_async(Connection, MsgId, PrepareMsg, OnReply)
     end,
 
@@ -516,10 +516,10 @@ update_vote_acc_internal({ok, Partition, Seq}, {ok, CommitVC}) ->
     {ok, pvc_vclock:set_time(Partition, Seq, CommitVC)}.
 
 encode_decide(Partitions, TxId, {error, _, _}) ->
-    ppb_protocol_driver:decide_node_abort(Partitions, TxId);
+    ppb_fastpsi_driver:decide_node_abort(Partitions, TxId);
 
 encode_decide(Partitions, TxId, {ok, CommitVC}) ->
-    ppb_protocol_driver:decide_node_commit(Partitions, TxId, CommitVC).
+    ppb_fastpsi_driver:decide_node_commit(Partitions, TxId, CommitVC).
 
 %% FIXME(borja): Types
 %% abort() is defined as {abort, _}
