@@ -123,8 +123,7 @@
               transaction_id/0,
               cluster_conns/0,
               transaction/0,
-              abort/0,
-              socket_error/0]).
+              abort/0]).
 
 %%====================================================================
 %% API functions
