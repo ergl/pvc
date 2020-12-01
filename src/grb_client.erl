@@ -95,7 +95,7 @@
 
 -spec new(inet:ip_address(), inet:port_number(), non_neg_integer()) -> {ok, coord()}.
 new(BootstrapIp, Port, CoordId) ->
-    {ok, LocalIp, ReplicaId, Ring, Nodes} = pvc_ring:grb_replica_info(BootstrapIp, Port),
+    {ok, LocalIp, ReplicaId, Ring, Nodes} = pvc_ring:grb_replica_info(BootstrapIp, Port, 16),
     {Pools, RedConns} = lists:foldl(fun(NodeIp, {ConAcc, RedAcc}) ->
         PoolName = list_to_atom(atom_to_list(NodeIp) ++ "_shackle_pool"),
         shackle_pool:start(PoolName, pvc_shackle_transport,

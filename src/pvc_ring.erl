@@ -3,11 +3,8 @@
 -include("pvc.hrl").
 
 %% API
--export([partition_info/2,
-         grb_replica_info/2,
-         grb_replica_info/3,
+-export([grb_replica_info/3,
          random_indexnode/1,
-         get_key_indexnode/2,
          get_key_indexnode/3]).
 
 
@@ -30,50 +27,11 @@
 -opaque ring() :: #ring{}.
 -export_type([ring/0]).
 
-%% @doc Given an address and port, get the partition info from that node
-%%
-%%      Returns the layout of the ring where the given node lives
-%%
--spec partition_info(Address :: node_ip(),
-                     Port :: inet:port_number()) -> {ok, ring(), unique_nodes()}
-                                                  | socket_error().
-
-partition_info(Address, Port) ->
-    case gen_tcp:connect(Address, Port, ?UTIL_CONN_OPTS) of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, Sock} ->
-            Reply = partition_info_internal(Sock),
-            ok = gen_tcp:close(Sock),
-            Reply
-    end.
-
--spec partition_info_internal(gen_tcp:socket()) -> {ok, ring(), unique_nodes()}
-                                                 | socket_error().
-
-partition_info_internal(Socket) ->
-    %% FIXME(borja): Hack to fit in message identifiers
-    ok = gen_tcp:send(Socket, <<0:16, (ppb_protocol_driver:connect())/binary>>),
-    case gen_tcp:recv(Socket, 0) of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, <<0:16, RawReply/binary>>} ->
-            {ok, RingSize, RawRing} = pvc_proto:decode_serv_reply(RawReply),
-            UniqueNodes = unique_ring_nodes(RawRing),
-            FixedRing = make_fixed_ring(RingSize, RawRing),
-            {ok, #ring{size=RingSize, fixed_ring=FixedRing}, UniqueNodes}
-    end.
-
 %% @doc Given an address and port, get the replica info from that node
 %%
 %%      Returns the layout of the ring where the given node lives,
 %%      as well as the replica identifier from the cluster.
 %%
--spec grb_replica_info(Address :: node_ip(),
-                       Port :: inet:port_number()) -> {ok, inet:ip_address(), term(), ring(), unique_nodes()}
-                                                      | socket_error().
-grb_replica_info(Address, Port) ->
-    grb_replica_info(Address, Port, 16).
 
 -spec grb_replica_info(Address :: node_ip(),
                        Port :: inet:port_number(),
@@ -104,10 +62,6 @@ grb_replica_info(Address, Port, LenBits) ->
 random_indexnode(#ring{size=Size, fixed_ring=Layout}) ->
     Pos = rand:uniform(Size - 1),
     erlang:element(Pos, Layout).
-
--spec get_key_indexnode(ring(), term()) -> index_node().
-get_key_indexnode(Ring, Key) ->
-    get_key_indexnode(Ring, Key, ?ANTIDOTE_BUCKET).
 
 -spec get_key_indexnode(ring(), term(), term()) -> index_node().
 get_key_indexnode(#ring{size=Size, fixed_ring=Layout}, Key, Bucket) ->

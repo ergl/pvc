@@ -377,7 +377,7 @@ key_updated(State, Key, Cache) ->
         {ok, Value} ->
             {true, Value};
         error ->
-            Node = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
+            Node = pvc_ring:get_key_indexnode(State#coord_state.ring, Key, ?ANTIDOTE_BUCKET),
             {false, Node}
     end.
 
@@ -389,7 +389,7 @@ key_updated(State, Key, Cache) ->
 
 update_internal(State, Key, Value, Cache, ProtState) ->
     NewCache = orddict:store(Key, Value, Cache),
-    IndexNode = pvc_ring:get_key_indexnode(State#coord_state.ring, Key),
+    IndexNode = pvc_ring:get_key_indexnode(State#coord_state.ring, Key, ?ANTIDOTE_BUCKET),
     {NewCache, write_protocol_state(IndexNode, Key, Value, ProtState)}.
 
 write_protocol_state(IndexNode, Key, Value, ST=#psi_state{writeset=WS}) ->
