@@ -73,23 +73,33 @@ get_key_indexnode(#ring{size=Size, fixed_ring=Layout}, Key, Bucket) ->
 %%====================================================================
 
 -spec convert_key(term(), term()) -> non_neg_integer().
-convert_key(Key, Bucket) when is_binary(Key) ->
-    try
-        abs(binary_to_integer(Key))
-    catch _:_ ->
-        %% Looked into the internals of riak_core for this
-        HashedKey = crypto:hash(sha, term_to_binary({Bucket, Key})),
-        abs(crypto:bytes_to_integer(HashedKey))
-    end;
+convert_key(Key, Bucket) ->
+    if
+        is_integer(Key) -> convert_key_int(Key);
+        is_binary(Key) -> convert_key_binary(Key, Bucket);
+        is_tuple(Key) -> convert_key_hash(element(1, Key), Bucket);
+        true -> convert_key_hash(Key, Bucket)
+    end.
 
-convert_key(Key, _) when is_integer(Key) ->
-    abs(Key);
+-spec convert_key_int(integer()) -> non_neg_integer().
+convert_key_int(Int) ->
+    abs(Int).
 
-convert_key(TermKey, Bucket) ->
+-spec convert_key_binary(binary(), term()) -> non_neg_integer().
+convert_key_binary(Bin, Bucket) ->
+    AsInt = (catch list_to_integer(binary_to_list(Bin))),
+    if
+        is_integer(AsInt) ->
+            convert_key_int(AsInt);
+        true ->
+            convert_key_hash(Bin, Bucket)
+    end.
+
+-spec convert_key_hash(term(), term()) -> non_neg_integer().
+convert_key_hash(Key, Bucket) ->
     %% Looked into the internals of riak_core for this
-    BinaryTerm = term_to_binary({Bucket, term_to_binary(TermKey)}),
-    HashedKey = crypto:hash(sha, BinaryTerm),
-    abs(crypto:bytes_to_integer(HashedKey)).
+    HashKey = crypto:hash(sha, term_to_binary({Bucket, term_to_binary(Key)})),
+    abs(crypto:bytes_to_integer(HashKey)).
 
 %%====================================================================
 %% Partition Internal functions
