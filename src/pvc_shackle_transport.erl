@@ -38,19 +38,19 @@ uniform_barrier(Pool, Partition, CVC) ->
 start_transaction(Pool, Partition, CVC) ->
     shackle:call(Pool, {start_tx, Partition, CVC}, infinity).
 
--spec read_request(atom(), term(), term(), term(), binary(), term(), boolean()) -> {ok, term()}.
+-spec read_request(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, term()}.
 read_request(Pool, Partition, TxId, SVC, Key, Type, ReadAgain) ->
     shackle:call(Pool, {read_request, Partition, TxId, SVC, Key, Type, ReadAgain}, infinity).
 
--spec cast_read_request(atom(), term(), term(), term(), binary(), term(), boolean()) -> {ok, shackle:external_request_id()}.
+-spec cast_read_request(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, shackle:external_request_id()}.
 cast_read_request(Pool, Partition, TxId, SVC, Key, Type, ReadAgain) ->
     shackle:cast(Pool, {read_request, Partition, TxId, SVC, Key, Type, ReadAgain}, self(), infinity).
 
--spec update_request(atom(), term(), term(), term(), binary(), term(), boolean()) -> {ok, term()}.
+-spec update_request(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, term()}.
 update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
     shackle:call(Pool, {update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, infinity).
 
--spec cast_update_request(atom(), term(), term(), term(), binary(), term(), boolean()) -> {ok, shackle:external_request_id()}.
+-spec cast_update_request(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, shackle:external_request_id()}.
 cast_update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
     shackle:cast(Pool, {update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, self(), infinity).
 

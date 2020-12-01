@@ -40,11 +40,11 @@
 
 -type conn_pool() :: atom().
 
--type read_req_id() :: {read, ReqId :: shackle:external_request_id(), Idx :: index_node()}.
--type update_req_id() :: {update, ReqId :: shackle:external_request_id(), Op :: term(), Idx :: index_node()}.
--type update_send_req_id() :: {update_send, shackle:external_request_id(), term(), index_node()}.
+-type read_req_id() :: {read, shackle:external_request_id(), index_node()}.
+-type update_req_id() :: {update, shackle:external_request_id(), operation(), index_node()}.
+-type update_send_req_id() :: {update_send, shackle:external_request_id(), operation(), index_node()}.
 
--type read_grouped_req_id() :: {read_grouped, ReqId :: shackle:external_request_id(), Idx :: index_node()}.
+-type read_grouped_req_id() :: {read_grouped, shackle:external_request_id(), index_node()}.
 
 -record(coordinator, {
     %% The IP we're using to talk to the server
@@ -86,9 +86,20 @@
 -opaque coord() :: #coordinator{}.
 -opaque tx() :: #transaction{}.
 
+-type key() :: term().
+-type key_type() :: grb_crdt:crdt().
+-type operation() :: grb_crdt:op().
+-type snapshot() :: term().
+-type tx_label() :: binary().
+
 -export_type([conn_pool/0,
               coord/0,
               tx/0,
+              key/0,
+              key_type/0,
+              operation/0,
+              snapshot/0,
+              tx_label/0,
               read_req_id/0,
               update_req_id/0,
               read_grouped_req_id/0]).
@@ -130,7 +141,7 @@ new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool, RedConnections) ->
 -spec put_conflict_information(Address :: node_ip(),
                                Port :: inet:port_number(),
                                LenBits :: non_neg_integer(),
-                               Concflicts :: #{binary() := binary()}) -> ok | socket_error().
+                               Conflicts :: #{tx_label() := tx_label()}) -> ok | socket_error().
 
 put_conflict_information(Address, Port, LenBits, Conflicts) ->
     case gen_tcp:connect(Address, Port, ?UTIL_CONN_OPTS) of
@@ -164,12 +175,12 @@ start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CV
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
     {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
--spec read_key_snapshot(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
+-spec read_key_snapshot(coord(), tx(), key(), key_type()) -> {ok, snapshot(), tx()}.
 read_key_snapshot(Coord, Tx, Key, Type) ->
     {ok, ReqId} = send_read_key(Coord, Tx, Key, Type),
     receive_read_key(Coord, Tx, Key, ReqId).
 
--spec read_key_snapshots(coord(), tx(), [{binary(), term()}]) -> {ok, #{binary() := term()}, tx()}.
+-spec read_key_snapshots(coord(), tx(), [{key(), key_type()}]) -> {ok, #{key() := snapshot()}, tx()}.
 read_key_snapshots(Coord, Tx0, KeyTypes) ->
     KeyRequests = lists:map(fun({Key, Type}) ->
         {ok, ReqId} = send_read_key(Coord, Tx0, Key, Type),
@@ -195,7 +206,7 @@ send_read_key(#coordinator{ring=Ring, conn_pool=Pools},
                                                           Key, Type, maps:get(P, ReadP, false)),
     {ok, {read, ReqId, Idx}}.
 
--spec receive_read_key(coord(), tx(), binary(), read_req_id()) -> {ok, term(), tx()}.
+-spec receive_read_key(coord(), tx(), key(), read_req_id()) -> {ok, snapshot(), tx()}.
 receive_read_key(_Coord,
                  Tx=#transaction{read_partitions=ReadP, rws=RWS},
                  Key,
@@ -204,7 +215,7 @@ receive_read_key(_Coord,
     {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
                                   rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.
 
--spec send_read_partition(coord(), tx(), [{binary(), term()}]) -> {ok, read_grouped_req_id()}.
+-spec send_read_partition(coord(), tx(), [{key(), key_type()}]) -> {ok, read_grouped_req_id()}.
 send_read_partition(#coordinator{ring=Ring, conn_pool=Pools},
                                #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
                                [{FKey, _}]=KeyTypes) ->
@@ -215,7 +226,7 @@ send_read_partition(#coordinator{ring=Ring, conn_pool=Pools},
     {ok, ReqId} = pvc_shackle_transport:cast_partition_read_request(Pool, P, TxId, SVC, ReadAgain, KeyTypes),
     {ok, {read_grouped, ReqId, Idx}}.
 
--spec receive_read_partition(coord(), tx(), read_grouped_req_id()) -> {ok, #{binary() := term()}, tx()}.
+-spec receive_read_partition(coord(), tx(), read_grouped_req_id()) -> {ok, #{key() := snapshot()}, tx()}.
 receive_read_partition(_Coord, Tx0, {read_grouped, ReqId, Idx}) ->
 
     {ok, Responses} = shackle:receive_response(ReqId),
@@ -226,12 +237,12 @@ receive_read_partition(_Coord, Tx0, {read_grouped, ReqId, Idx}) ->
 
     {ok, Responses, Tx}.
 
--spec update_operation(coord(), tx(), binary(), term()) -> {ok, term(), tx()}.
+-spec update_operation(coord(), tx(), key(), operation()) -> {ok, snapshot(), tx()}.
 update_operation(Coord, Tx, Key, Operation) ->
     {ok, ReqId} = send_key_update(Coord, Tx, Key, Operation),
     receive_key_update(Coord, Tx, Key, ReqId).
 
--spec send_key_update(coord(), tx(), binary(), term()) -> {ok, update_req_id()}.
+-spec send_key_update(coord(), tx(), key(), operation()) -> {ok, update_req_id()}.
 send_key_update(#coordinator{ring=Ring, conn_pool=Pools},
                 #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
                 Key,
@@ -243,7 +254,7 @@ send_key_update(#coordinator{ring=Ring, conn_pool=Pools},
                                                             Key, Operation, maps:get(P, ReadP, false)),
     {ok, {update, ReqId, Operation, Idx}}.
 
--spec receive_key_update(coord(), tx(), binary(), update_req_id()) -> {ok, term(), tx()}.
+-spec receive_key_update(coord(), tx(), key(), update_req_id()) -> {ok, snapshot(), tx()}.
 receive_key_update(_Coord,
                     Tx=#transaction{read_partitions=ReadP, rws=RWS},
                     Key,
@@ -254,7 +265,7 @@ receive_key_update(_Coord,
                                  read_partitions=ReadP#{P => true},
                                  rws=pvc_grb_rws:add_operation(Idx, Key, Op, RWS)}}.
 
--spec send_key_operation(coord(), tx(), binary(), term()) -> {ok, update_send_req_id()}.
+-spec send_key_operation(coord(), tx(), key(), operation()) -> {ok, update_send_req_id()}.
 send_key_operation(#coordinator{ring=Ring, conn_pool=Pools},
                    #transaction{id=TxId},
                    Key,
@@ -264,7 +275,7 @@ send_key_operation(#coordinator{ring=Ring, conn_pool=Pools},
     {ok, ReqId} = pvc_shackle_transport:cast_update_send(Pool, P, TxId, Key, Operation),
     {ok, {update_send, ReqId, Operation, Idx}}.
 
--spec receive_key_operation(coord(), tx(), binary(), update_send_req_id()) -> {ok, tx()}.
+-spec receive_key_operation(coord(), tx(), key(), update_send_req_id()) -> {ok, tx()}.
 receive_key_operation(_Coord,
                       Tx=#transaction{rws=RWS},
                       Key,
@@ -274,7 +285,7 @@ receive_key_operation(_Coord,
     {ok, Tx#transaction{read_only=false,
                         rws=pvc_grb_rws:add_operation(Idx, Key, Operation, RWS)}}.
 
--spec update_operations_grouped(coord(), tx(), [{binary(), module(), term()}]) -> {ok, #{binary() := term()}, tx()}.
+-spec update_operations_grouped(coord(), tx(), [{key(), key_type(), term()}]) -> {ok, #{key() := snapshot()}, tx()}.
 update_operations_grouped(#coordinator{ring=Ring, conn_pool=Pools},
                           Tx0=#transaction{vc=SVC, read_partitions=ReadP, id=TxId},
                           KeyOps0) ->
@@ -324,7 +335,7 @@ commit(Coord, Tx) -> commit_internal(Coord, Tx).
 commit_red(Coord, Tx) ->
     commit_red(Coord, Tx, <<"default">>).
 
--spec commit_red(coord(), tx(), binary()) -> {ok, rvc()} | {abort, term()}.
+-spec commit_red(coord(), tx(), tx_label()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx, Label) ->
     #coordinator{red_connections=RedConns, coordinator_id=Id} = Coord,
     #transaction{rws=RWS, id=TxId, vc=SVC, start_node={Partition, CoordNode}} = Tx,

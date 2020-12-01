@@ -3,7 +3,7 @@
 -include("pvc.hrl").
 
 -type rs() :: #{term() => undefined}.
--type ws() :: #{term() => grb_crdt:op()}.
+-type ws() :: #{term() => grb_crdt:operation()}.
 
 -type inner_set() :: {rs(), ws()}.
 -type partitions_readwriteset() :: #{partition_id() => inner_set()}.
