@@ -33,6 +33,9 @@
 -export([send_key_operation/4,
          receive_key_operation/4]).
 
+%% Sync simple update API (blind write)
+-export([send_key_operations/3]).
+
 %% Commit API
 -export([commit/2,
          commit_red/2,
@@ -298,6 +301,18 @@ receive_key_operation(_Coord,
     ok = shackle:receive_response(ReqId),
     {ok, Tx#transaction{read_only=false,
                         rws=pvc_grb_rws:add_operation(Idx, Key, Operation, RWS)}}.
+
+-spec send_key_operations(coord(), tx(), [{key(), operation()}]) -> {ok, tx()}.
+send_key_operations(Coord, Tx0, KeyOps) ->
+    KeyReqs = [
+        {K, element(2, send_key_operation(Coord, Tx0, K, O))}
+        || {K, O} <- KeyOps
+    ],
+    Tx1 = lists:foldl(fun({K, Id}, TxAcc0) ->
+        {ok, TxAcc} = receive_key_operation(Coord, TxAcc0, K, Id),
+        TxAcc
+    end, Tx0, KeyReqs),
+    {ok, Tx1}.
 
 -spec commit(coord(), tx()) -> rvc().
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
