@@ -5,6 +5,7 @@
          start_transaction/3,
          read_request/7,
          cast_read_request/7,
+         cast_read_operation/7,
          update_request/7,
          cast_update_request/7,
          cast_partition_read_request/6,
@@ -45,6 +46,10 @@ read_request(Pool, Partition, TxId, SVC, Key, Type, ReadAgain) ->
 -spec cast_read_request(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, shackle:external_request_id()}.
 cast_read_request(Pool, Partition, TxId, SVC, Key, Type, ReadAgain) ->
     shackle:cast(Pool, {read_request, Partition, TxId, SVC, Key, Type, ReadAgain}, self(), infinity).
+
+-spec cast_read_operation(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, shackle:external_request_id()}.
+cast_read_operation(Pool, Partition, TxId, SVC, Key, ReadOp, ReadAgain) ->
+    shackle:cast(Pool, {read_operation, Partition, TxId, SVC, Key, ReadOp, ReadAgain}, self(), infinity).
 
 -spec update_request(atom(), term(), term(), term(), term(), term(), boolean()) -> {ok, term()}.
 update_request(Pool, Partition, TxId, SVC, Key, Operation, ReadAgain) ->
@@ -92,6 +97,9 @@ handle_request({start_tx, Partition, CVC}, S=#state{req_counter=Req, id_len=Len}
 
 handle_request({read_request, Partition, TxId, SVC, Key, Type, ReadAgain}, S=#state{req_counter=Req, id_len=Len}) ->
     {ok, Req, <<Req:Len, (ppb_grb_driver:read_request(Partition, TxId, SVC, ReadAgain, Key, Type))/binary>>, incr_req(S)};
+
+handle_request({read_operation, Partition, TxId, SVC, Key, ReadOp, ReadAgain}, S=#state{req_counter=Req, id_len=Len}) ->
+    {ok, Req, <<Req:Len, (ppb_grb_driver:read_operation_request(Partition, TxId, SVC, ReadAgain, Key, ReadOp))/binary>>, incr_req(S)};
 
 handle_request({update_request, Partition, TxId, SVC, Key, Operation, ReadAgain}, S=#state{req_counter=Req, id_len=Len}) ->
     {ok, Req, <<Req:Len, (ppb_grb_driver:update_request(Partition, TxId, SVC, ReadAgain, Key, Operation))/binary>>, incr_req(S)};

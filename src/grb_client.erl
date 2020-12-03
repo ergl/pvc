@@ -15,6 +15,7 @@
 
 %% Sync read / update API
 -export([read_key_snapshot/4,
+         read_key_operation/4,
          read_key_snapshots/3,
          update_operation/4,
          update_operations/3]).
@@ -22,6 +23,8 @@
 %% Async read API
 -export([send_read_key/4,
          receive_read_key/4,
+         send_read_operation/4,
+         receive_read_operation/4,
          send_read_partition/3,
          receive_read_partition/3]).
 
@@ -44,6 +47,7 @@
 -type conn_pool() :: atom().
 
 -type read_req_id() :: {read, shackle:external_request_id(), index_node()}.
+-type read_op_req_id() :: {read_operation, shackle:external_request_id(), index_node()}.
 -type update_req_id() :: {update, shackle:external_request_id(), operation(), index_node()}.
 -type update_send_req_id() :: {update_send, shackle:external_request_id(), operation(), index_node()}.
 
@@ -104,6 +108,7 @@
               snapshot/0,
               tx_label/0,
               read_req_id/0,
+              read_op_req_id/0,
               update_req_id/0,
               read_partition_req_id/0]).
 
@@ -183,6 +188,11 @@ read_key_snapshot(Coord, Tx, Key, Type) ->
     {ok, ReqId} = send_read_key(Coord, Tx, Key, Type),
     receive_read_key(Coord, Tx, Key, ReqId).
 
+-spec read_key_operation(coord(), tx(), key(), operation()) -> {ok, term(), tx()}.
+read_key_operation(Coord, Tx, Key, Operation) ->
+    {ok, ReqId} = send_read_operation(Coord, Tx, Key, Operation),
+    receive_read_operation(Coord, Tx, Key, ReqId).
+
 -spec read_key_snapshots(coord(), tx(), [{key(), key_type()}]) -> {ok, #{key() := snapshot()}, tx()}.
 read_key_snapshots(Coord, Tx0, KeyTypes) ->
     KeyRequests = lists:map(fun({Key, Type}) ->
@@ -217,6 +227,28 @@ receive_read_key(_Coord,
     {ok, Snapshot} = shackle:receive_response(ReqId),
     {ok, Snapshot, Tx#transaction{read_partitions=ReadP#{P => true},
                                   rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.
+
+-spec send_read_operation(coord(), tx(), binary(), term()) -> {ok, read_op_req_id()}.
+send_read_operation(#coordinator{ring=Ring, conn_pool=Pools},
+                    #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
+                    Key,
+                    Operation) ->
+
+    Idx={P,N} = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    Pool = maps:get(N, Pools),
+    {ok, ReqId} = pvc_shackle_transport:cast_read_operation(Pool, P, TxId, SVC,
+                                                            Key, Operation, maps:get(P, ReadP, false)),
+    {ok, {read_operation, ReqId, Idx}}.
+
+-spec receive_read_operation(coord(), tx(), key(), read_op_req_id()) -> {ok, term(), tx()}.
+receive_read_operation(_Coord,
+                        Tx=#transaction{read_partitions=ReadP, rws=RWS},
+                        Key,
+                        {read_operation, ReqId, Idx={P, _}}) ->
+
+    {ok, Value} = shackle:receive_response(ReqId),
+    {ok, Value, Tx#transaction{read_partitions=ReadP#{P => true},
+                               rws=pvc_grb_rws:add_read_key(Idx, Key, RWS)}}.
 
 -spec send_read_partition(coord(), tx(), [{key(), key_type()}]) -> {ok, read_partition_req_id()}.
 send_read_partition(#coordinator{ring=Ring, conn_pool=Pools},
