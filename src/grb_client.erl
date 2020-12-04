@@ -16,6 +16,7 @@
 %% Sync read / update API
 -export([read_key_snapshot/4,
          read_key_operation/4,
+         read_key_operations/3,
          read_key_snapshots/3,
          update_operation/4,
          update_operations/3]).
@@ -193,6 +194,20 @@ read_key_operation(Coord, Tx, Key, Operation) ->
     {ok, ReqId} = send_read_operation(Coord, Tx, Key, Operation),
     receive_read_operation(Coord, Tx, Key, ReqId).
 
+-spec read_key_operations(coord(), tx(), [{key(), operation()}]) -> {ok, #{key() := term()}, tx()}.
+read_key_operations(Coord, Tx0, KeyReadOps) ->
+    KeyRequests = lists:map(fun({Key, ReadOp}) ->
+        {ok, ReqId} = send_read_operation(Coord, Tx0, Key, ReadOp),
+        {Key, ReqId}
+    end, KeyReadOps),
+
+    {Responses, Tx} = lists:foldl(fun({Key, ReqId}, {Responses0, Acc0}) ->
+        {ok, Val, Acc} = receive_read_operation(Coord, Acc0, Key, ReqId),
+        {Responses0#{Key => Val}, Acc}
+    end, {#{}, Tx0}, KeyRequests),
+
+    {ok, Responses, Tx}.
+
 -spec read_key_snapshots(coord(), tx(), [{key(), key_type()}]) -> {ok, #{key() := snapshot()}, tx()}.
 read_key_snapshots(Coord, Tx0, KeyTypes) ->
     KeyRequests = lists:map(fun({Key, Type}) ->
@@ -200,9 +215,9 @@ read_key_snapshots(Coord, Tx0, KeyTypes) ->
         {Key, ReqId}
     end, KeyTypes),
 
-    {Responses, Tx} = lists:foldl(fun({Key, ReqId}, {Responses, Acc0}) ->
+    {Responses, Tx} = lists:foldl(fun({Key, ReqId}, {Responses0, Acc0}) ->
         {ok, Snapshot, Acc} = receive_read_key(Coord, Acc0, Key, ReqId),
-        {Responses#{Key => Snapshot}, Acc}
+        {Responses0#{Key => Snapshot}, Acc}
     end, {#{}, Tx0}, KeyRequests),
 
     {ok, Responses, Tx}.
@@ -284,9 +299,9 @@ update_operations(Coord, Tx0, KeyOps) ->
         {Key, ReqId}
     end, KeyOps),
 
-    {Responses, Tx} = lists:foldl(fun({Key, ReqId}, {Responses, Acc0}) ->
+    {Responses, Tx} = lists:foldl(fun({Key, ReqId}, {Responses0, Acc0}) ->
         {ok, Snapshot, Acc} = receive_key_update(Coord, Acc0, Key, ReqId),
-        {Responses#{Key => Snapshot}, Acc}
+        {Responses0#{Key => Snapshot}, Acc}
     end, {#{}, Tx0}, KeyRequests),
 
     {ok, Responses, Tx}.
