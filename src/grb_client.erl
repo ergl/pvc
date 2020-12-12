@@ -267,8 +267,8 @@ receive_read_operation(_Coord,
 
 -spec send_read_partition(coord(), tx(), [{key(), key_type()}]) -> {ok, read_partition_req_id()}.
 send_read_partition(#coordinator{ring=Ring, conn_pool=Pools},
-                               #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
-                               [{FKey, _}]=KeyTypes) ->
+                    #transaction{vc=SVC, read_partitions=ReadP, id=TxId},
+                    [ {FKey, _} | _ ]=KeyTypes) ->
 
     Idx={P,N} = pvc_ring:get_key_indexnode(Ring, FKey, ?GRB_BUCKET),
     Pool = maps:get(N, Pools),
@@ -320,9 +320,9 @@ send_key_update(#coordinator{ring=Ring, conn_pool=Pools},
 
 -spec receive_key_update(coord(), tx(), key(), update_req_id()) -> {ok, snapshot(), tx()}.
 receive_key_update(_Coord,
-                    Tx=#transaction{read_partitions=ReadP, rws=RWS},
-                    Key,
-                    {update, ReqId, Op, Idx={P, _}}) ->
+                   Tx=#transaction{read_partitions=ReadP, rws=RWS},
+                   Key,
+                   {update, ReqId, Op, Idx={P, _}}) ->
 
     {ok, Snapshot} = shackle:receive_response(ReqId),
     {ok, Snapshot, Tx#transaction{read_only=false,
