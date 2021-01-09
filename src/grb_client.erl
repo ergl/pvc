@@ -45,6 +45,9 @@
          commit_red/2,
          commit_red/3]).
 
+%% Put a key in the writeset, without doing anything else
+-export([add_keyop_to_writeset_unsafe/4]).
+
 -type conn_pool() :: atom().
 
 -type read_req_id() :: {read, shackle:external_request_id(), index_node()}.
@@ -168,6 +171,14 @@ put_conflict_information(Address, Port, LenBits, Conflicts) ->
             ok = gen_tcp:close(Sock),
             Reply
     end.
+
+-spec add_keyop_to_writeset_unsafe(coord(), tx(), key(), operation()) -> {ok, tx()}.
+add_keyop_to_writeset_unsafe(#coordinator{ring=Ring},
+                             T=#transaction{rws=RWS},
+                             Key,
+                             Op) ->
+    Idx = pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET),
+    {ok, T#transaction{rws=pvc_grb_rws:add_operation(Idx, Key, Op, RWS)}}.
 
 -spec uniform_barrier(coord(), rvc()) -> ok.
 uniform_barrier(#coordinator{ring=Ring, conn_pool=Pools}, CVC) ->
