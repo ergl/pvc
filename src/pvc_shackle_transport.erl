@@ -77,7 +77,7 @@ prepare_blue(Pool, TxId, SVC, Partitions) ->
 
 -spec decide_blue(atom(), term(), [term()], term()) -> ok.
 decide_blue(Pool, TxId, Partitions, CVC) ->
-    shackle:call(Pool, {decide_blue, TxId, Partitions, CVC}).
+    shackle:call(Pool, {decide_blue, TxId, Partitions, CVC}, infinity).
 
 init(Options) ->
     IdLen = maps:get(id_len, Options, 16),
