@@ -78,7 +78,7 @@
     coordinator_id :: non_neg_integer()
 }).
 
--type transaction_id() :: {binary(), non_neg_integer(), non_neg_integer()}.
+-type transaction_id() :: {replica_id(), binary(), non_neg_integer(), non_neg_integer()}.
 -type rvc() :: grb_vclock:vc(replica_id()).
 -type read_partitions() :: #{partition_id() => true}.
 
@@ -191,9 +191,9 @@ start_transaction(Coord, Id) ->
     start_transaction(Coord, Id, grb_vclock:new()).
 
 -spec start_transaction(coord(), non_neg_integer(), rvc()) -> {ok, tx()}.
-start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId}, Id, CVC) ->
+start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId, replica_id=ReplicaId}, Id, CVC) ->
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
-    {ok, #transaction{id={Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
+    {ok, #transaction{id={ReplicaId, Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
 
 -spec read_key_snapshot(coord(), tx(), key(), key_type()) -> {ok, snapshot(), tx()}.
 read_key_snapshot(Coord, Tx, Key, Type) ->
