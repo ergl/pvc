@@ -2,7 +2,8 @@
 -include("pvc.hrl").
 
 %% Util API
--export([put_conflict_information/4]).
+-export([key_location/2,
+         put_conflict_information/4]).
 
 %% Create coordinator
 -export([new/3,
@@ -11,7 +12,8 @@
 %% Start API
 -export([uniform_barrier/2,
          start_transaction/2,
-         start_transaction/3]).
+         start_transaction/3,
+         start_transaction/4]).
 
 %% Sync read / update API
 -export([read_key_snapshot/4,
@@ -150,6 +152,10 @@ new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool, RedConnections) ->
                       red_connections=RedConnections,
                       coordinator_id=CoordId}}.
 
+-spec key_location(coord(), key()) -> index_node().
+key_location(#coordinator{ring=Ring}, Key) ->
+    pvc_ring:get_key_indexnode(Ring, Key, ?GRB_BUCKET).
+
 -spec put_conflict_information(Address :: node_ip(),
                                Port :: inet:port_number(),
                                LenBits :: non_neg_integer(),
@@ -194,6 +200,13 @@ start_transaction(Coord, Id) ->
 start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId, replica_id=ReplicaId}, Id, CVC) ->
     {ok, SVC, StartNode} = start_internal(CVC, Coord),
     {ok, #transaction{id={ReplicaId, Ip, LocalId, Id}, vc=SVC, start_node=StartNode}}.
+
+-spec start_transaction(coord(), non_neg_integer(), rvc(), index_node()) -> {ok, tx()}.
+start_transaction(Coord=#coordinator{self_ip=Ip, coordinator_id=LocalId, replica_id=ReplicaId},
+                  Id, CVC, StartIdx={P, N}) ->
+    Pool = maps:get(N, Coord#coordinator.conn_pool),
+    {ok, SVC} = pvc_shackle_transport:start_transaction(Pool, P, CVC),
+    {ok, #transaction{id={ReplicaId, Ip, LocalId, Id}, vc=SVC, start_node=StartIdx}}.
 
 -spec read_key_snapshot(coord(), tx(), key(), key_type()) -> {ok, snapshot(), tx()}.
 read_key_snapshot(Coord, Tx, Key, Type) ->
