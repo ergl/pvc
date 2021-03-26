@@ -14,11 +14,6 @@
                          {packet, 4},
                          {nodelay, true}]).
 
--define(RED_CONN_OPTS, [binary,
-                       {active, once},
-                       {packet, 4},
-                       {nodelay, true}]).
-
 -export_type([node_ip/0,
               socket_error/0,
               unique_nodes/0,

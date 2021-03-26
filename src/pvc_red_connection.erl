@@ -1,121 +1,69 @@
 -module(pvc_red_connection).
+-behavior(shackle_client).
 -include("pvc.hrl").
--behavior(gen_server).
 
--export([start_connection/3]).
+-export([commit_red/6]).
 
--export([commit_red/7]).
-
-%% gen_server callbacks
+%% API
 -export([init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2]).
+         setup/2,
+         handle_request/2,
+         handle_data/2,
+         handle_timeout/2,
+         terminate/1]).
 
 -record(state, {
-    socket :: gen_tcp:socket(),
     id_len :: non_neg_integer(),
-    msg_owners :: ets:tab()
+    req_counter :: non_neg_integer(),
+    max_req_id :: non_neg_integer()
 }).
+-type state() :: #state{}.
 
--record(handler, {
-    conn_pid :: pid(),
-    id_len :: non_neg_integer(),
-    socket :: gen_tcp:socket(),
-    msg_owners :: ets:tab()
-}).
-
--type t() :: #handler{}.
-
--spec start_connection(inet:ip_address(), inet:port_number(), non_neg_integer()) -> {ok, t()} | {error, term()}.
-start_connection(IP, Port, IdLen) ->
-    case gen_server:start_link(?MODULE, [IP, Port, IdLen], []) of
-        {ok, Pid} ->
-            make_handler(Pid, IdLen);
-        {error, {already_started, Pid}} ->
-            make_handler(Pid, IdLen);
-        Other ->
-            {error, Other}
-    end.
-
--spec make_handler(pid(), non_neg_integer()) -> {ok, t()}.
-make_handler(Pid, IdLen) ->
-    {ok, Socket} = gen_server:call(Pid, socket, infinity),
-    {ok, Owners} = gen_server:call(Pid, owners_table, infinity),
-    Handler = #handler{conn_pid=Pid, socket=Socket, msg_owners=Owners, id_len=IdLen},
-    {ok, Handler}.
-
--spec commit_red(Handler :: t(),
-                 Id :: non_neg_integer(),
+-spec commit_red(Pool :: atom(),
                  Partition :: partition_id(),
                  TxId :: term(),
-                 Label :: binary(),
+                 Label :: term(),
                  SVC :: #{replica_id() => non_neg_integer()},
-                 Prepares :: [{partition_id(), [], #{}}]) -> ok.
+                 Prepres :: [{partition_id(), [], #{}}]) -> {ok, #{}} | {abort, term()}.
 
-commit_red(Handler, Id, Partition, TxId, Label, SVC, Prepares) ->
-    #handler{socket=Socket, msg_owners=Owners, id_len=IdLen} = Handler,
-    Msg = <<Id:IdLen, (ppb_grb_driver:commit_red(Partition, TxId, Label, SVC, Prepares))/binary>>,
-    true = ets:insert_new(Owners, {Id, self()}),
-    ok = gen_tcp:send(Socket, Msg),
-    receive
-        {?MODULE, Socket, Data} -> pvc_proto:decode_serv_reply(Data)
-    end.
+commit_red(Pool, Partition, TxId, Label, SVC, Prepares) ->
+    shackle:call(Pool, {commit_red, Partition, TxId, Label, SVC, Prepares}, infinity).
 
 %%%===================================================================
-%%% gen_server callbacks
+%%% shackle callbacks
 %%%===================================================================
 
-init([IP, Port, IdLen]) ->
-    case gen_tcp:connect(IP, Port, ?RED_CONN_OPTS) of
-        {error, Reason} ->
-            {stop, Reason};
-        {ok, Socket} ->
-            Owners = ets:new(owners, [set, public, {write_concurrency, true}]),
-            State = #state{socket=Socket,
-                           id_len=IdLen,
-                           msg_owners=Owners},
-            {ok, State}
-    end.
+init(Options) ->
+    IdLen = maps:get(id_len, Options, 16),
+    MaxId = trunc(math:pow(2, IdLen)),
+    {ok, #state{id_len=IdLen,
+                req_counter=0,
+                max_req_id=MaxId}}.
 
-handle_call(owners_table, _From, S=#state{msg_owners=Owners}) ->
-    {reply, {ok, Owners}, S};
+setup(_Socket, State) ->
+    {ok, State}.
 
-handle_call(socket, _From, S=#state{socket=Socket}) ->
-    {reply, {ok, Socket}, S};
+handle_request({commit_red, Partition, TxId, Label, SVC, Prepares}, S=#state{req_counter=Req, id_len=Len}) ->
+    {ok, Req, <<Req:Len, (ppb_grb_driver:commit_red(Partition, TxId, Label, SVC, Prepares))/binary>>, incr_req(S)};
 
-handle_call(_E, _From, S) ->
-    {reply, ok, S}.
+handle_request(_Request, _State) ->
+    erlang:error(unknown_request).
 
-handle_cast(_E, S) ->
-    {noreply, S}.
-
-handle_info({tcp, Socket, Data}, State=#state{socket=Socket, id_len=IdLen, msg_owners=Owners}) ->
+handle_data(Data, State=#state{id_len=IdLen}) ->
     case Data of
         <<Id:IdLen, RawReply/binary>> ->
-            case ets:take(Owners, Id) of
-                [{Id, SenderPid}] ->
-                    SenderPid ! {?MODULE, Socket, RawReply};
-                [] ->
-                    %% todo(borja): ???
-                    ok
-            end;
+            {ok, [{Id, pvc_proto:decode_serv_reply(RawReply)}], State};
         _ ->
-            ok
-    end,
-    ok = inet:setopts(Socket, [{active, once}]),
-    {noreply, State};
+            {error, bad_data, State}
+    end.
 
-handle_info({tcp_closed, _Socket}, S) ->
-    {stop, normal, S};
+handle_timeout(RequestId, State) ->
+    {ok, {RequestId, {error, timeout}}, State}.
 
-handle_info({tcp_error, _Socket, Reason}, S) ->
-    {stop, Reason, S};
+terminate(_State) -> ok.
 
-handle_info(timeout, State) ->
-    {stop, normal, State}.
+%% Util
 
-terminate(_Reason, #state{socket=Socket}) ->
-    ok = gen_tcp:close(Socket),
-    ok.
+-spec incr_req(state()) -> state().
+incr_req(S=#state{req_counter=ReqC, max_req_id=MaxId}) ->
+    S#state{req_counter=((ReqC + 1) rem MaxId)}.

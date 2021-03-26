@@ -51,6 +51,7 @@
 -export([add_keyop_to_writeset_unsafe/4]).
 
 -type conn_pool() :: atom().
+-type red_conn_pool() :: atom().
 
 -type read_req_id() :: {read, shackle:external_request_id(), index_node()}.
 -type read_op_req_id() :: {read_operation, shackle:external_request_id(), index_node()}.
@@ -69,13 +70,14 @@
     %% Replica ID of the connected cluster
     replica_id = ignore :: replica_id(),
 
-    %% Opened connection, one per node in the cluster
+    %% Opened pool of connections, one pool per node in the cluster
     conn_pool :: #{inet:ip_address() => conn_pool()},
-    %% Connection used for red commit, one per node in the cluster
-    %% We use a separate connection for red commit to increase utilization:
-    %% since clients wait for a long time (cross-replica RTT), it's enough to
-    %% have a single connection.
-    red_connections :: #{inet:ip_address() => pvc_red_connection:t()},
+
+    %% Connection used for red commit, one pool per node in the cluster
+    %% We use a separate pool of connections for red commit to increase utilization:
+    %% since clients wait for a long time (cross-replica RTT), they could interfere
+    %% with low-latency connections.
+    red_connections :: #{inet:ip_address() => red_conn_pool()},
 
     coordinator_id :: non_neg_integer()
 }).
@@ -106,6 +108,7 @@
 -type tx_label() :: binary().
 
 -export_type([conn_pool/0,
+              red_conn_pool/0,
               coord/0,
               tx/0,
               key/0,
@@ -123,16 +126,22 @@ new(BootstrapIp, Port, CoordId) ->
     {ok, LocalIp, ReplicaId, Ring, Nodes} = pvc_ring:grb_replica_info(BootstrapIp, Port, 16),
     {Pools, RedConns} = lists:foldl(fun(NodeIp, {ConAcc, RedAcc}) ->
         PoolName = list_to_atom(atom_to_list(NodeIp) ++ "_shackle_pool"),
+        RedPoolName = list_to_atom(atom_to_list(NodeIp) ++ "_shackle_red_pool"),
         shackle_pool:start(PoolName, pvc_shackle_transport,
                            [{address, NodeIp}, {port, Port}, {reconnect, false},
                             {socket_options, [{packet, 4}, binary, {nodelay, true}]},
                             {init_options, #{id_len => 16}}],
                            [{pool_size, 16}]),
 
-        {ok, H} = pvc_red_connection:start_connection(NodeIp, Port, 16),
+        shackle_pool:start(RedPoolName, pvc_red_connection,
+                           [{address, NodeIp}, {port, Port}, {reconnect, false},
+                            {socket_options, [{packet, 4}, binary, {nodelay, true}]},
+                            {init_options, #{id_len => 16}}],
+                           [{pool_size, 16}]),
+
         {
             ConAcc#{NodeIp => PoolName},
-            RedAcc#{NodeIp => H}
+            RedAcc#{NodeIp => RedPoolName}
         }
     end, {#{}, #{}}, Nodes),
     new(ReplicaId, LocalIp, CoordId, Ring, Pools, RedConns).
@@ -142,7 +151,7 @@ new(BootstrapIp, Port, CoordId) ->
           CoordId :: non_neg_integer(),
           RingInfo :: pvc_ring:ring(),
           NodePool :: #{inet:ip_address() => conn_pool()},
-          RedConnections :: #{inet:ip_address() => pvc_red_connection:t()}) -> {ok, coord()}.
+          RedConnections :: #{inet:ip_address() => red_conn_pool()}) -> {ok, coord()}.
 
 new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool, RedConnections) ->
     {ok, #coordinator{self_ip=list_to_binary(inet:ntoa(LocalIP)),
@@ -395,11 +404,11 @@ commit_red(Coord, Tx) ->
 
 -spec commit_red(coord(), tx(), tx_label()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx, Label) ->
-    #coordinator{red_connections=RedConns, coordinator_id=Id} = Coord,
+    #coordinator{red_connections=RedConns} = Coord,
     #transaction{rws=RWS, id=TxId, vc=SVC, start_node={Partition, CoordNode}} = Tx,
-    ConnHandle = maps:get(CoordNode, RedConns),
+    Pool = maps:get(CoordNode, RedConns),
     Prepares = pvc_grb_rws:make_red_prepares(RWS),
-    pvc_red_connection:commit_red(ConnHandle, Id, Partition, TxId, Label, SVC, Prepares).
+    pvc_red_connection:commit_red(Pool, Partition, TxId, Label, SVC, Prepares).
 
 %%====================================================================
 %% Read Internal functions
