@@ -5,7 +5,8 @@
 %% API
 -export([grb_replica_info/3,
          random_indexnode/1,
-         get_key_indexnode/3]).
+         get_key_indexnode/3,
+         size/1]).
 
 
 %% @doc Raw ring structure returned from antidote
@@ -68,6 +69,10 @@ get_key_indexnode(#ring{size=Size, fixed_ring=Layout}, Key, Bucket) ->
     Pos = convert_key(Key, Bucket) rem Size + 1,
     erlang:element(Pos, Layout).
 
+-spec size(ring()) -> non_neg_integer().
+size(#ring{size=Size}) ->
+    Size.
+
 %%====================================================================
 %% Routing Internal functions
 %%====================================================================
@@ -77,7 +82,7 @@ convert_key(Key, Bucket) ->
     if
         is_integer(Key) -> convert_key_int(Key);
         is_binary(Key) -> convert_key_binary(Key, Bucket);
-        is_tuple(Key) -> convert_key_hash(element(1, Key), Bucket);
+        is_tuple(Key) -> convert_key(element(1, Key), Bucket);
         true -> convert_key_hash(Key, Bucket)
     end.
 

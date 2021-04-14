@@ -2,7 +2,8 @@
 -include("pvc.hrl").
 
 %% Util API
--export([key_location/2,
+-export([ring_size/1,
+         key_location/2,
          put_conflict_information/4]).
 
 %% Create coordinator
@@ -160,6 +161,10 @@ new(ReplicaId, LocalIP, CoordId, RingInfo, NodePool, RedConnections) ->
                       conn_pool=NodePool,
                       red_connections=RedConnections,
                       coordinator_id=CoordId}}.
+
+-spec ring_size(coord()) -> non_neg_integer().
+ring_size(#coordinator{ring=Ring}) ->
+    pvc_ring:size(Ring).
 
 -spec key_location(coord(), key()) -> index_node().
 key_location(#coordinator{ring=Ring}, Key) ->
