@@ -117,7 +117,7 @@ handle_request({prepare_blue, TxId, SVC, Partitions}, S=#state{req_counter=Req, 
     {ok, Req, <<Req:Len, (ppb_grb_driver:prepare_blue_node(TxId, SVC, Partitions))/binary>>, incr_req(S)};
 
 handle_request({decide_blue, TxId, Partitions, CVC}, S=#state{req_counter=Req, id_len=Len}) ->
-    {ok, <<Req:Len, (ppb_grb_driver:decide_blue_node(TxId, Partitions, CVC))/binary>>, incr_req(S)};
+    {ok, undefined, <<Req:Len, (ppb_grb_driver:decide_blue_node(TxId, Partitions, CVC))/binary>>, incr_req(S)};
 
 handle_request(_Request, _State) ->
     erlang:error(unknown_request).

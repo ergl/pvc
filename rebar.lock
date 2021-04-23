@@ -19,7 +19,7 @@
   1},
  {<<"shackle">>,
   {git,"https://github.com/ergl/shackle.git",
-       {ref,"1ededcdc4a0f1447b7f98afda4dda91cc33f158b"}},
+       {ref,"40521de15b467022618047a765bce64f048a94c9"}},
   0}]}.
 [
 {pkg_hash,[
