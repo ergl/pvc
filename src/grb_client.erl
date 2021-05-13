@@ -403,6 +403,7 @@ send_key_operations(Coord, Tx0, KeyOps) ->
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
 commit(Coord, Tx) -> commit_internal(Coord, Tx).
 
+%% todo(borja): We should rethink if we have to certify read-only transactions.
 -spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
 commit_red(Coord, Tx) ->
     commit_red(Coord, Tx, <<"default">>).
