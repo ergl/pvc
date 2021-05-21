@@ -46,7 +46,9 @@
 %% Commit API
 -export([commit/2,
          commit_red/2,
-         commit_red/3]).
+         commit_red/3,
+         commit_red_include_readonly/2,
+         commit_red_include_readonly/3]).
 
 %% Put a key in the writeset, without doing anything else
 -export([add_keyop_to_writeset_unsafe/4]).
@@ -403,13 +405,26 @@ send_key_operations(Coord, Tx0, KeyOps) ->
 commit(_, #transaction{read_only=true, vc=SVC}) -> SVC;
 commit(Coord, Tx) -> commit_internal(Coord, Tx).
 
-%% todo(borja): We should rethink if we have to certify read-only transactions.
 -spec commit_red(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
-commit_red(Coord, Tx) ->
-    commit_red(Coord, Tx, <<"default">>).
+commit_red(_, #transaction{read_only=true, vc=SVC}) -> {ok, SVC};
+commit_red(Coord, Tx) -> commit_red(Coord, Tx, <<"default">>).
 
 -spec commit_red(coord(), tx(), tx_label()) -> {ok, rvc()} | {abort, term()}.
+commit_red(_, #transaction{read_only=true, vc=SVC}, _) ->
+    {ok, SVC};
 commit_red(Coord, Tx, Label) ->
+    #coordinator{red_connections=RedConns} = Coord,
+    #transaction{rws=RWS, id=TxId, vc=SVC, start_node={Partition, CoordNode}} = Tx,
+    Pool = maps:get(CoordNode, RedConns),
+    Prepares = pvc_grb_rws:make_red_prepares(RWS),
+    pvc_red_connection:commit_red(Pool, Partition, TxId, Label, SVC, Prepares).
+
+-spec commit_red_include_readonly(coord(), tx()) -> {ok, rvc()} | {abort, term()}.
+commit_red_include_readonly(Coord, Tx) ->
+    commit_red_include_readonly(Coord, Tx, <<"default">>).
+
+-spec commit_red_include_readonly(coord(), tx(), tx_label()) -> {ok, rvc()} | {abort, term()}.
+commit_red_include_readonly(Coord, Tx, Label) ->
     #coordinator{red_connections=RedConns} = Coord,
     #transaction{rws=RWS, id=TxId, vc=SVC, start_node={Partition, CoordNode}} = Tx,
     Pool = maps:get(CoordNode, RedConns),
